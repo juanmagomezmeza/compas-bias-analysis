@@ -28,18 +28,21 @@ Incluye generación de visualizaciones, análisis estadístico y evaluación de 
 ### 1. Clonar el repositorio
 
 git clone https://github.com/juanmagomezmeza/compas-bias-analysis.git
+
 cd compas-bias-analysis
 
 ### 2. Crear y activar el entorno virtual
 
-# IMPORTANTE: Ejecutar todo desde la carpeta raiz!!!
+## IMPORTANTE: Ejecutar todo desde la carpeta raiz!!!
 
 # Windows
 python -m venv venv
+
 .\venv\Scripts\activate
 
 # Linux / MacOS
 python3 -m venv venv
+
 source venv/bin/activate
 
 ### 3. Instalar dependencias
