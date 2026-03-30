@@ -15,7 +15,7 @@ Originalmente desarrollado para el análisis del sistema **COMPAS** (justicia pe
 
 ## 🛠️ Estructura del Proyecto
 
-
+```text
 ├── pipeline_auditoria.py   # Núcleo del framework (Auditoría y Reporte PDF)
 ├── preparar_compas.py      # Script ETL: Procesa datos de ProPublica (Justicia)
 ├── preparar_german.py      # Script ETL: Procesa datos de OpenML (Finanzas)
@@ -60,14 +60,14 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 ### 3. Ejecución del proyecto
-1. Preparar los datos (ETL)
+# 1. Preparar los datos (ETL)
 python3 preparar_compas.py  # Genera compas_limpio.csv
 python3 preparar_german.py  # Genera german_credit_limpio.csv
 
-2. Ejecutar la Auditoría
+# 2. Ejecutar la Auditoría
 Utiliza el flag --config para indicar qué dataset y reglas de negocio auditar:
-python3 pipeline_auditoria.py --config config_compas.json --Para auditar COMPAS
-python3 pipeline_auditoria.py --config config_german.json --Para auditar German Credit
+python3 pipeline_auditoria.py --config config_compas.json # Para auditar COMPAS
+python3 pipeline_auditoria.py --config config_german.json # Para auditar German Credit
 
 ## 📊 Entregables de la Auditoría
 Al finalizar, el sistema genera automáticamente:
