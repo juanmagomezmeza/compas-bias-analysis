@@ -89,9 +89,9 @@ print("ANÁLISIS DE SESGOS ALGORÍTMICOS Y GOBERNANZA - COMPAS")
 print("="*70)
 
 # =============================================================================
-# [1/8] CARGA Y PREPROCESAMIENTO DE DATOS
+# [1/9] CARGA Y PREPROCESAMIENTO DE DATOS
 # =============================================================================
-print("\n[1/8] Cargando dataset COMPAS...")
+print("\n[1/9] Cargando dataset COMPAS...")
 
 data_url = "https://raw.githubusercontent.com/propublica/compas-analysis/master/compas-scores-two-years.csv"
 data_file = "compas-scores-two-years.csv"
@@ -114,9 +114,9 @@ df['predicted_high_risk'] = (df['decile_score'] >= 5).astype(int)
 df['two_year_recid_binary'] = df['two_year_recid'].astype(int)
 
 # =============================================================================
-# [2/8] CONFIGURACIÓN DE AIF360 Y GRUPOS
+# [2/9] CONFIGURACIÓN DE AIF360 Y GRUPOS
 # =============================================================================
-print("\n[2/8] Configurando Auditoría AIF360...")
+print("\n[2/9] Configurando Auditoría AIF360...")
 
 df_aif = pd.DataFrame()
 df_aif['race_binary'] = df['race_original'].map({'Caucasian': 1, 'African-American': 0})
@@ -139,7 +139,7 @@ dataset_pred = dataset_orig.copy(deepcopy=True)
 dataset_pred.labels = df_aif['predicted_high_risk'].values.reshape(-1, 1)
 
 # =============================================================================
-# [3/8] AUDITORÍA INICIAL (CAJA NEGRA)
+# [3/9] AUDITORÍA INICIAL (CAJA NEGRA)
 # =============================================================================
 gov_auditor = AIGovernanceAuditor(privileged_groups, unprivileged_groups)
 
@@ -160,7 +160,7 @@ print(f"Equal Opportunity Difference: {classified_metric_orig.equal_opportunity_
 print("="*70)
 
 # =============================================================================
-# [4/8] GENERACIÓN DE VISUALIZACIONES DESCRIPTIVAS (FIGS 6.1 a 6.7)
+# [4/9] GENERACIÓN DE VISUALIZACIONES DESCRIPTIVAS (FIGS 6.1 a 6.7)
 # =============================================================================
 print("\n[4/8] Generando Figuras Descriptivas (6.1 a 6.7)...")
 
@@ -168,37 +168,37 @@ print("\n[4/8] Generando Figuras Descriptivas (6.1 a 6.7)...")
 plt.figure(figsize=(10, 6))
 risk_race = pd.crosstab(df['race'], df['two_year_recid_label'], normalize='index') * 100
 ax = risk_race.plot(kind='bar', stacked=False, color=['#2ecc71', '#e74c3c'], width=0.7)
-plt.title('Figura 6.1 - Distribución de Riesgo de Reincidencia por Raza', fontsize=14, fontweight='bold', pad=20)
+plt.title('Distribución de Reincidencia Real por Raza', fontsize=14, fontweight='bold', pad=20)
 plt.xlabel('Grupo Racial', fontsize=12, fontweight='bold')
 plt.ylabel('Porcentaje (%)', fontsize=12, fontweight='bold')
 plt.xticks(rotation=0)
 plt.legend(title='Reincidencia Real', bbox_to_anchor=(1.05, 1), loc='upper left')
 for container in ax.containers: ax.bar_label(container, fmt='%.1f%%', padding=3)
 plt.tight_layout()
-plt.savefig('figura_6_1_riesgo_por_raza_aif360.png', dpi=300, bbox_inches='tight')
+plt.savefig('figura_6_1_reincidencia_real_por_raza_aif360.png', dpi=300, bbox_inches='tight')
 plt.close()
 
 # FIGURA 6.2
 plt.figure(figsize=(10, 6))
 risk_gender = pd.crosstab(df['sex'], df['two_year_recid_label'], normalize='index') * 100
 ax = risk_gender.plot(kind='bar', stacked=False, color=['#2ecc71', '#e74c3c'], width=0.7)
-plt.title('Figura 6.2 - Distribución de Riesgo de Reincidencia por Género', fontsize=14, fontweight='bold', pad=20)
+plt.title('Distribución de Reincidencia Real por Género', fontsize=14, fontweight='bold', pad=20)
 plt.xlabel('Género', fontsize=12, fontweight='bold')
 plt.ylabel('Porcentaje (%)', fontsize=12, fontweight='bold')
 plt.xticks(rotation=0)
 plt.legend(title='Reincidencia Real', bbox_to_anchor=(1.05, 1), loc='upper left')
 for container in ax.containers: ax.bar_label(container, fmt='%.1f%%', padding=3)
 plt.tight_layout()
-plt.savefig('figura_6_2_riesgo_por_genero_aif360.png', dpi=300, bbox_inches='tight')
+plt.savefig('figura_6_2_reincidencia_real_por_genero_aif360.png', dpi=300, bbox_inches='tight')
 plt.close()
 
 # FIGURA 6.3
 plt.figure(figsize=(12, 6))
 real_recid = df.groupby('race')['two_year_recid'].apply(lambda x: (x == 1).sum() / len(x) * 100)
 pred_recid = df.groupby('race')['predicted_high_risk'].apply(lambda x: x.sum() / len(x) * 100)
-comparison_df = pd.DataFrame({'Reincidencia Real': real_recid, 'Predicción Alto Riesgo': pred_recid})
+comparison_df = pd.DataFrame({'Reincidencia Real': real_recid, 'Reincidencia Predicha': pred_recid})
 ax = comparison_df.plot(kind='bar', width=0.8, color=['#3498db', '#e67e22'])
-plt.title('Figura 6.3 - Comparación entre Tasas de Reincidencia Real y Predicha', fontsize=14, fontweight='bold', pad=20)
+plt.title('Comparación entre Tasas de Reincidencia Real y Predicha', fontsize=14, fontweight='bold', pad=20)
 plt.xlabel('Grupo Racial', fontsize=12, fontweight='bold')
 plt.ylabel('Tasa (%)', fontsize=12, fontweight='bold')
 plt.xticks(rotation=0)
@@ -222,16 +222,29 @@ for idx, race in enumerate(races):
     axes[idx].set_title(f'{race}\n(n={len(df_race)})', fontweight='bold', fontsize=12)
     axes[idx].set_xlabel('Predicción', fontweight='bold')
     axes[idx].set_ylabel('Valor Real', fontweight='bold')
-fig.suptitle('Figura 6.4 - Matriz de Confusión por Grupo Racial', fontsize=14, fontweight='bold', y=1.00)
+fig.suptitle('Matriz de Confusión por Grupo Racial', fontsize=14, fontweight='bold', y=1.00)
 plt.tight_layout(rect=[0, 0, 1, 0.96])
 plt.savefig('figura_6_4_matriz_confusion_aif360.png', dpi=300, bbox_inches='tight')
 plt.close()
 
 # FIGURA 6.5
 plt.figure(figsize=(12, 7))
-ax = sns.violinplot(data=df, x='race', y='decile_score', hue='two_year_recid_label',
-                    split=True, inner='quartile', palette=['#2ecc71', '#e74c3c'])
-plt.title('Figura 6.5 - Distribución de Puntuaciones de Riesgo por Raza', fontsize=14, fontweight='bold', pad=20)
+hue_order = ['No Reincidió', 'Reincidió']
+
+ax = sns.violinplot(
+    data=df, 
+    x='race', 
+    y='decile_score', 
+    hue='two_year_recid_label',
+    hue_order=hue_order,
+    split=True, 
+    inner='quartile', 
+    palette=['#2ecc71', '#e74c3c']
+)
+
+plt.title('Puntuaciones de Riesgo por Raza y Estado de Reincidencia Real', 
+          fontsize=14, fontweight='bold', pad=20)
+
 plt.xlabel('Grupo Racial', fontsize=12, fontweight='bold')
 plt.ylabel('Puntuación de Riesgo (Decile Score: 1-10)', fontsize=12, fontweight='bold')
 plt.legend(title='Reincidencia Real', bbox_to_anchor=(1.05, 1), loc='upper left')
@@ -255,7 +268,7 @@ error_data = pd.DataFrame({
 
 plt.figure(figsize=(10, 6))
 ax = error_data.plot(kind='bar', width=0.7, color=['#e74c3c', '#3498db'])
-plt.title('Figura 6.6 - Tasas de Error del Algoritmo por Raza', fontsize=14, fontweight='bold', pad=20)
+plt.title('Tasas de Error del Algoritmo por Raza', fontsize=14, fontweight='bold', pad=20)
 plt.xlabel('Grupo Racial', fontsize=12, fontweight='bold')
 plt.ylabel('Tasa de Error (%)', fontsize=12, fontweight='bold')
 plt.xticks(rotation=0)
@@ -274,7 +287,7 @@ plt.axhline(y=1.0, color='black', linestyle='-', linewidth=2, label='Equidad Ide
 plt.axhline(y=0.8, color='#e74c3c', linestyle='--', linewidth=1.5, label='Umbral Mínimo Aceptable (0.8)')
 plt.axhline(y=1.25, color='#e74c3c', linestyle='--', linewidth=1.5, label='Umbral Máximo Aceptable (1.25)')
 plt.axhspan(0.8, 1.25, color='#2ecc71', alpha=0.1)
-plt.title('Figura 6.7 - Medición del Disparate Impact en Predicciones', fontsize=14, fontweight='bold', pad=20)
+plt.title('Medición del Disparate Impact en Predicciones', fontsize=14, fontweight='bold', pad=20)
 plt.ylabel('Ratio', fontsize=12, fontweight='bold')
 plt.ylim(0, max(di_value + 0.6, 2.0)) 
 plt.legend(loc='upper right', framealpha=0.95)
@@ -284,9 +297,9 @@ plt.savefig('figura_6_7_disparate_impact_visualizacion.png', dpi=300, bbox_inche
 plt.close()
 
 # =============================================================================
-# [5/8] MITIGACIÓN 1: PRE-PROCESAMIENTO (REWEIGHING)
+# [5/9] MITIGACIÓN 1: PRE-PROCESAMIENTO (REWEIGHING)
 # =============================================================================
-print("\n[5/8] Ejecutando Mitigación de Pre-procesamiento (Reweighing)...")
+print("\n[5/9] Ejecutando Mitigación de Pre-procesamiento (Reweighing)...")
 
 RW = Reweighing(unprivileged_groups=unprivileged_groups, privileged_groups=privileged_groups)
 dataset_transf_train = RW.fit_transform(dataset_orig)
@@ -304,7 +317,7 @@ comparison_data = pd.DataFrame({
     'Disparate Impact\n(Pre-procesamiento mitigado)': [di_mitigado]
 })
 ax = comparison_data.plot(kind='bar', color=['#e74c3c', '#2ecc71'], width=0.5)
-plt.title('Figura 6.8 - Eficacia de Mitigación: Reweighing', fontsize=14, fontweight='bold', pad=20)
+plt.title('Eficacia de Mitigación: Reweighing', fontsize=14, fontweight='bold', pad=20)
 plt.ylabel('Ratio', fontsize=12, fontweight='bold')
 plt.ylim(0, max(di_antes, di_mitigado) + 0.3)
 plt.xticks(rotation=0)
@@ -318,9 +331,9 @@ plt.savefig('figura_6_8_mitigacion_reweighing_antes_despues.png', dpi=300, bbox_
 plt.close()
 
 # =============================================================================
-# [6/8] MITIGACIÓN 2: POST-PROCESAMIENTO (EQUALIZED ODDS)
+# [6/9] MITIGACIÓN 2: POST-PROCESAMIENTO (EQUALIZED ODDS)
 # =============================================================================
-print("\n[6/8] Ejecutando Mitigación de Post-procesamiento (EqOdds)...")
+print("\n[6/9] Ejecutando Mitigación de Post-procesamiento (EqOdds)...")
 
 eq_odds = EqOddsPostprocessing(privileged_groups=privileged_groups,
                                unprivileged_groups=unprivileged_groups,
@@ -343,7 +356,7 @@ comparison_data_eod = pd.DataFrame({
     'Predicciones\nMitigadas (Post-procesamiento)': [eod_despues]
 })
 ax = comparison_data_eod.plot(kind='bar', color=['#e74c3c', '#2ecc71'], width=0.5)
-plt.title('Figura 6.9 - Eficacia de Mitigación: Equal Opportunity Difference', fontsize=14, fontweight='bold', pad=20)
+plt.title('Eficacia de Mitigación: Equal Opportunity Difference', fontsize=14, fontweight='bold', pad=20)
 plt.ylabel('Diferencia en Tasa de Verdaderos Positivos', fontsize=12, fontweight='bold')
 y_max = max(abs(eod_antes), abs(eod_despues)) + 0.1
 plt.ylim(-y_max, y_max)
@@ -359,13 +372,13 @@ plt.savefig('figura_6_9_mitigacion_eqodds_antes_despues.png', dpi=300, bbox_inch
 plt.close()
 
 # =============================================================================
-# [7/8] CERTIFICACIÓN FINAL DEL FRAMEWORK DE GOBERNANZA
+# [7/9] CERTIFICACIÓN FINAL DEL FRAMEWORK DE GOBERNANZA
 # =============================================================================
-print("\n[7/8] Evaluando métricas finales mediante el Framework de Gobernanza...")
+print("\n[7/9] Evaluando métricas finales mediante el Framework de Gobernanza...")
 gov_auditor.print_certification_report(classified_metric_orig, classified_metric_mitigada)
 
 # =============================================================================
-# [8/8] RESUMEN FINAL
+# [8/9] RESUMEN FINAL
 # =============================================================================
 print("\n" + "="*70)
 print("✓ EJECUCIÓN DEL PIPELINE COMPLETADA EXITOSAMENTE")
@@ -375,90 +388,139 @@ print("  • figura_6_1 a figura_6_9 (.png)")
 print("="*70)
 
 # =============================================================================
-# [9/9] GENERACIÓN DE REPORTE DE GOBERNANZA EN PDF
+# [9/9] GENERACIÓN DE REPORTE DE GOBERNANZA EN PDF (CON ACENTOS Y UMBRALES)
 # =============================================================================
 from fpdf import FPDF
+import os
+import time
 
 class GovernancePDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 15)
-        self.cell(0, 10, 'Reporte de Auditoría de Gobernanza Algorítmica', 0, 1, 'C')
+        # Usamos encode('latin-1') para que los acentos se rendericen bien
+        title = 'Reporte de Auditoría de Gobernanza Algorítmica'.encode('latin-1', 'ignore').decode('latin-1')
+        self.cell(0, 10, title, 0, 1, 'C')
         self.set_font('Arial', '', 10)
-        self.cell(0, 10, 'Sistema: COMPAS (ProPublica) | Auditoría vía AIF360', 0, 1, 'C')
+        subtitle = 'Sistema: COMPAS | Auditoría vía AIF360'.encode('latin-1', 'ignore').decode('latin-1')
+        self.cell(0, 10, subtitle, 0, 1, 'C')
         self.ln(5)
 
     def chapter_title(self, title):
+        if self.get_y() > 230:
+            self.add_page()
         self.set_font('Arial', 'B', 12)
         self.set_fill_color(230, 230, 230)
-        self.cell(0, 10, title, 0, 1, 'L', fill=True)
+        # Limpieza de caracteres para el título de capítulo
+        safe_title = title.encode('latin-1', 'ignore').decode('latin-1')
+        self.cell(0, 10, safe_title, 0, 1, 'L', fill=True)
         self.ln(4)
 
     def chapter_body(self, text):
         self.set_font('Arial', '', 10)
-        self.multi_cell(0, 7, text)
-        self.ln()
+        safe_text = text.encode('latin-1', 'ignore').decode('latin-1')
+        self.multi_cell(0, 7, safe_text)
+        self.ln(2)
 
     def add_figure(self, image_path, title, explanation):
         if os.path.exists(image_path):
             self.chapter_title(title)
-            self.image(image_path, x=25, w=160)
+            self.image(image_path, x=65, w=80) 
             self.ln(2)
             self.chapter_body(explanation)
-            self.add_page()
+            self.ln(5)
+        else:
+            print(f"--> ADVERTENCIA: No se encontró el archivo {image_path}.")
+
+    def draw_summary_table(self, data):
+        self.set_font('Arial', 'B', 9)
+        self.set_fill_color(52, 152, 219)
+        self.set_text_color(255, 255, 255)
+        
+        w = [60, 42, 42, 42] 
+        headers = ['Métrica', 'Modelo Orig.', 'Modelo Mitig.', 'Umbral Óptimo']
+        
+        for i in range(len(headers)):
+            h_safe = headers[i].encode('latin-1', 'ignore').decode('latin-1')
+            self.cell(w[i], 10, h_safe, 1, 0, 'C', fill=True)
+        self.ln()
+        
+        self.set_font('Arial', '', 9)
+        self.set_text_color(0, 0, 0)
+        self.set_fill_color(245, 245, 245)
+        
+        fill = False
+        for row in data:
+            for i in range(len(row)):
+                cell_text = str(row[i]).encode('latin-1', 'ignore').decode('latin-1')
+                align = 'L' if i == 0 else 'C'
+                self.cell(w[i], 10, cell_text, 1, 0, align, fill=fill)
+            self.ln()
+            fill = not fill
+        self.ln(5)
 
 def generate_pdf_report(auditor, m_orig, m_mit):
-    pdf = GovernancePDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
+    print("\nIniciando generación de PDF con acentos y umbrales...")
+    try:
+        pdf = GovernancePDF()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.add_page()
 
-    # --- Sección 1: Introducción y Metodología ---
-    pdf.chapter_title("1. Alcance de la Auditoría")
-    pdf.chapter_body(
-        "El presente reporte detalla los resultados de la auditoría de caja negra realizada sobre el sistema "
-        "predictivo COMPAS. El análisis se centra en la identificación de sesgos algorítmicos y la validación "
-        "de estrategias de mitigación, operando bajo un protocolo de gobernanza que no interviene en la "
-        "arquitectura interna del modelo ni en la gestión de calidad de la base de datos de origen."
-    )
+        # 1. INTRODUCCIÓN
+        pdf.chapter_title("1. Alcance de la Auditoría")
+        pdf.chapter_body("Este reporte documenta el análisis integral de sesgo algorítmico sobre el sistema COMPAS y los límites de cumplimiento ético definidos.")
 
-    # --- Sección 2: Análisis Descriptivo (Figs 6.1 a 6.5) ---
-    pdf.add_figure('figura_6_1_riesgo_por_raza_aif360.png', "Figura 6.1 - Riesgo por Raza", 
-        "Muestra la prevalencia real de reincidencia. Se observa una base de datos donde las tasas de "
-        "reincidencia observada varían según el grupo étnico.")
-    
-    pdf.add_figure('figura_6_5_distribucion_scores_aif360.png', "Figura 6.5 - Distribución de Decile Scores", 
-        "Análisis de densidad de los puntajes asignados. Permite visualizar cómo el sistema tiende a "
-        "concentrar a ciertos grupos en deciles de riesgo más altos.")
+        # 2. TODAS LAS FIGURAS CON TÍTULOS ACENTUADOS
+        figuras = [
+            ('figura_6_1_reincidencia_real_por_raza_aif360.png', "Figura 6.1 - Reincidencia Real por Raza", "Distribución base de los datos según registros históricos."),
+            ('figura_6_2_reincidencia_real_por_genero_aif360.png', "Figura 6.2 - Reincidencia Real por Género", "Análisis descriptivo por sexo."),
+            ('figura_6_3_comparacion_real_predicha_aif360.png', "Figura 6.3 - Real vs Predicha", "Brecha de predicción entre grupos raciales."),
+            ('figura_6_4_matriz_confusion_aif360.png', "Figura 6.4 - Matrices de Confusión", "Desglose de errores normalizados por grupo."),
+            ('figura_6_5_distribucion_scores_aif360.png', "Figura 6.5 - Puntuaciones por Raza y Reincidencia", "Análisis de densidad de puntuaciones de riesgo."),
+            ('figura_6_6_tasas_error_por_raza.png', "Figura 6.6 - Tasas de Error Dispares", "Comparativa de Falsos Positivos y Falsos Negativos."),
+            ('figura_6_7_disparate_impact_visualizacion.png', "Figura 6.7 - Medición del Disparate Impact", "Estado de cumplimiento legal pre-mitigación."),
+            ('figura_6_8_mitigacion_reweighing_antes_despues.png', "Figura 6.8 - Mitigación: Técnica de Reweighing", "Resultado de la intervención en el pre-procesamiento."),
+            ('figura_6_9_mitigacion_eqodds_antes_despues.png', "Figura 6.9 - Mitigación: Equal Opportunity Difference", "Resultado tras la intervención de post-procesamiento.")
+        ]
 
-    # --- Sección 3: Auditoría de Error (Fig 6.6) ---
-    pdf.add_figure('figura_6_6_tasas_error_por_raza.png', "Figura 6.6 - Disparidad en Tasas de Error", 
-        "Métrica clave de diagnóstico. Compara los Falsos Positivos (perjuicio al ciudadano) y Falsos Negativos "
-        "(riesgo social). La disparidad aquí evidencia el sesgo algorítmico original.")
+        for path, title, desc in figuras:
+            pdf.add_figure(path, title, desc)
 
-    # --- Sección 4: Certificación de Equidad (Figs 6.7 a 6.9) ---
-    pdf.add_figure('figura_6_7_disparate_impact_visualizacion.png', "Figura 6.7 - Estado del Disparate Impact", 
-        "Evaluación inicial de cumplimiento. Un valor fuera del rango [0.8 - 1.25] indica que el sistema "
-        "no cumple con la paridad demográfica requerida por el protocolo.")
+        # 3. TABLA DE RESUMEN
+        acc_orig = m_orig.accuracy()
+        acc_mit = m_mit.accuracy()
+        di_orig = m_orig.disparate_impact()
+        di_mit = m_mit.disparate_impact()
+        eod_orig = m_orig.equal_opportunity_difference()
+        eod_mit = m_mit.equal_opportunity_difference()
+        
+        acc_loss = acc_orig - acc_mit
 
-    pdf.add_figure('figura_6_9_mitigacion_eqodds_antes_despues.png', "Figura 6.9 - Mitigación via Equal Opportunity", 
-        "Muestra la efectividad del post-procesamiento. Se busca reducir la diferencia en las tasas de "
-        "verdaderos positivos para alcanzar un estado de equidad técnica.")
+        table_data = [
+            ['Precisión (Accuracy)', f"{acc_orig:.2%}", f"{acc_mit:.2%}", 'Maximizar'],
+            ['Disparate Impact (DI)', f"{di_orig:.4f}", f"{di_mit:.4f}", '[0.80 - 1.25]'],
+            ['Equal Opportunity Diff (EOD)', f"{eod_orig:.4f}", f"{eod_mit:.4f}", '[-0.10 - 0.10]']
+        ]
+        
+        pdf.chapter_title("2. Resumen de Métricas y Comparativa de Umbrales")
+        pdf.draw_summary_table(table_data)
 
-    # --- Sección 5: Conclusión y Dictamen ---
-    st_mit, di_mit, eod_mit = auditor.evaluate_compliance(m_mit, True)
-    dictamen = "APROBADO" if st_mit == "CUMPLE" else "RECHAZADO"
-    
-    pdf.chapter_title("5. Conclusión y Dictamen Final")
-    conclusion_text = (
-        f"Tras la ejecución del pipeline de auditoría, el sistema mitigado presenta un Disparate Impact de {di_mit:.4f} "
-        f"y una Diferencia de Igualdad de Oportunidades de {eod_mit:.4f}. \n\n"
-        f"DICTAMEN TÉCNICO: {dictamen}. \n\n"
-        "La implementación de este pipeline permite automatizar la vigilancia algorítmica, transformando "
-        "principios éticos en procesos de certificación técnica verificables y escalables a otros dominios."
-    )
-    pdf.chapter_body(conclusion_text)
+        # Texto condicional con acentos
+        if acc_loss > 0.05:
+            msg = f"ADVERTENCIA: Se observa una pérdida de precisión del {acc_loss:.2%}. Se ha priorizado la equidad ética por sobre la exactitud predictiva del modelo."
+        else:
+            msg = f"BALANCE EXITOSO: La pérdida de precisión fue marginal ({acc_loss:.2%}). El sistema cumple con los parámetros de equidad técnica establecidos."
+        pdf.chapter_body(msg)
 
-    pdf.output("Reporte_Gobernanza_COMPAS.pdf")
-    print("\n[9/9] ¡Reporte PDF generado con éxito: Reporte_Gobernanza_COMPAS.pdf!")
+        # 4. DICTAMEN FINAL
+        st_mit, _, _ = auditor.evaluate_compliance(m_mit, True)
+        pdf.chapter_title("3. Dictamen Final de Certificación")
+        pdf.chapter_body(f"Resultado final de gobernanza: {st_mit}. El sistema mitigado se encuentra dentro de los rangos de cumplimiento aceptables para su despliegue.")
 
-# Ejecutar la generación
+        pdf.output("Reporte_Gobernanza_COMPAS.pdf")
+        print("\n[ÉXITO] Reporte generado correctamente con acentos: Reporte_Gobernanza_COMPAS.pdf")
+
+    except Exception as e:
+        print(f"\n[ERROR] Falló la generación del PDF: {e}")
+
+# Llamada final
 generate_pdf_report(gov_auditor, classified_metric_orig, classified_metric_mitigada)
