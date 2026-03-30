@@ -1,0 +1,22 @@
+{
+  "dataset_name": "ProPublica COMPAS Analysis",
+  "data_path": "compas-scores-two-years.csv",
+  "label_name": "two_year_recid",
+  "favorable_classes": [0], 
+  "protected_attribute_names": ["race"],
+  "privileged_classes": [["Caucasian"]],
+  "features_to_keep": [
+    "sex", "age", "race", "priors_count", 
+    "c_charge_degree", "two_year_recid", "decile_score"
+  ],
+  "plot_mapping": {
+    "target_label_col": "two_year_recid",
+    "target_label_name": "Reincidencia",
+    "protected_col": "race",
+    "secondary_col": "sex",
+    "priv_val_name": "Caucasian",
+    "unpriv_val_name": "African-American",
+    "risk_score_col": "decile_score",
+    "risk_threshold": 5
+  }
+}
