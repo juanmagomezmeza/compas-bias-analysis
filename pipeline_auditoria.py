@@ -1,6 +1,6 @@
 """
 Framework de Auditoría de Sesgos y Gobernanza Algorítmica
-Pipeline Agnóstico (Parametrizado vía settings.json y config.json)
+Pipeline Agnóstico (Parametrizado vía CLI y config.json)
 """
 
 import pandas as pd
@@ -13,7 +13,6 @@ from sklearn.metrics import confusion_matrix
 import warnings
 import os
 import json
-import urllib.request
 import argparse
 
 # Importar AIF360
@@ -78,33 +77,25 @@ class AIGovernanceAuditor:
         print("="*70)
 
 # =============================================================================
-# [1/9] CARGA DE CONFIGURACIÓN Y DATOS (VÍA ARGUMENTOS DE TERMINAL)
+# [1/9] CARGA DE CONFIGURACIÓN Y DATOS
 # =============================================================================
 print("\n[1/9] Cargando configuración y dataset...")
 
-# 1. Configurar el lector de argumentos de la terminal
 parser = argparse.ArgumentParser(description="Pipeline de Auditoría de Gobernanza Algorítmica")
-parser.add_argument('--config', type=str, default='config.json', 
-                    help='Ruta al archivo de configuración JSON a utilizar')
+parser.add_argument('--config', type=str, default='config.json', help='Ruta al archivo de configuración JSON')
 args = parser.parse_args()
-
 config_path = args.config
 
-# 2. Verificar que el archivo objetivo exista
 if not os.path.exists(config_path):
     raise FileNotFoundError(f"ERROR: No se encontró el archivo de configuración '{config_path}'.")
 
-# 3. Cargar la configuración final
 with open(config_path, 'r') as f:
     config = json.load(f)
 
-print(f"[*] Archivo de configuración cargado: {config_path}")
-print(f"Dataset activo: {config['dataset_name']}")
+print(f"[*] Configuración: {config_path} | Dataset: {config['dataset_name']}")
 
-# Lógica específica para descargar COMPAS si no existe
-if config['data_path'] == "compas-scores-two-years.csv" and not os.path.exists(config['data_path']):
-    print("Descargando dataset de prueba...")
-    urllib.request.urlretrieve("https://raw.githubusercontent.com/propublica/compas-analysis/master/compas-scores-two-years.csv", config['data_path'])
+if not os.path.exists(config['data_path']):
+    raise FileNotFoundError(f"ERROR: No se encontró el dataset en '{config['data_path']}'. Ejecuta primero el script de preparación de datos (ETL).")
 
 df_raw = pd.read_csv(config['data_path'])
 df = df_raw[config['features_to_keep']].copy()
@@ -133,18 +124,13 @@ df = df[df[p_col].isin([priv_val, unpriv_val])]
 # =============================================================================
 print("\n[2/9] Configurando Auditoría AIF360 dinámicamente...")
 
-# 1. Separar SOLO las columnas originales (dejamos fuera las etiquetas de texto de los gráficos)
 df_for_aif = df[config['features_to_keep']].copy()
-
-# 2. Detectar automáticamente qué columnas son de texto/categóricas
 cat_cols = df_for_aif.select_dtypes(include=['object', 'string', 'category']).columns.tolist()
 
-# 3. Remover los atributos protegidos y el target de esa lista
 for col in config['protected_attribute_names'] + [config['label_name']]:
     if col in cat_cols:
         cat_cols.remove(col)
 
-# 4. Instanciar el dataset avisándole cuáles son las columnas categóricas a transformar
 dataset_orig = StandardDataset(
     df=df_for_aif,
     label_name=config['label_name'],
@@ -154,7 +140,6 @@ dataset_orig = StandardDataset(
     categorical_features=cat_cols
 )
 
-# En AIF360 usando StandardDataset, la clase privilegiada siempre se convierte internamente a 1.0
 protected_attr_name = config['protected_attribute_names'][0]
 privileged_groups = [{protected_attr_name: 1.0}]
 unprivileged_groups = [{protected_attr_name: 0.0}]
@@ -185,7 +170,7 @@ print(f"Equal Opportunity Difference: {classified_metric_orig.equal_opportunity_
 # =============================================================================
 print("\n[4/9] Generando Figuras Descriptivas...")
 
-# FIG 6.1: Distribución Real por Atributo Protegido
+# FIG 6.1
 plt.figure(figsize=(10, 6))
 risk_prot = pd.crosstab(df[p_col], df['target_label_text'], normalize='index') * 100
 ax = risk_prot.plot(kind='bar', stacked=False, color=['#2ecc71', '#e74c3c'], width=0.7)
@@ -199,7 +184,7 @@ plt.tight_layout()
 plt.savefig('figura_6_1_real_por_atributo.png', dpi=300, bbox_inches='tight')
 plt.close()
 
-# FIG 6.2: Distribución Real por Atributo Secundario
+# FIG 6.2
 if sec_col in df.columns:
     plt.figure(figsize=(10, 6))
     risk_sec = pd.crosstab(df[sec_col], df['target_label_text'], normalize='index') * 100
@@ -214,7 +199,7 @@ if sec_col in df.columns:
     plt.savefig('figura_6_2_real_por_secundario.png', dpi=300, bbox_inches='tight')
     plt.close()
 
-# FIG 6.3: Comparación Real vs Predicha
+# FIG 6.3
 plt.figure(figsize=(12, 6))
 real_target = df.groupby(p_col)['target_binary'].apply(lambda x: (x == 1).sum() / len(x) * 100)
 pred_target = df.groupby(p_col)['predicted_high_risk'].apply(lambda x: x.sum() / len(x) * 100)
@@ -230,7 +215,7 @@ plt.tight_layout()
 plt.savefig('figura_6_3_comparacion_real_predicha.png', dpi=300, bbox_inches='tight')
 plt.close()
 
-# FIG 6.4: Matriz de Confusión Dinámica
+# FIG 6.4
 fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 groups = df[p_col].unique()
 for idx, group in enumerate(groups[:2]): 
@@ -249,7 +234,7 @@ plt.tight_layout(rect=[0, 0, 1, 0.96])
 plt.savefig('figura_6_4_matriz_confusion.png', dpi=300, bbox_inches='tight')
 plt.close()
 
-# FIG 6.6: Tasas de Error
+# FIG 6.6
 df_unpriv = df[df[p_col] == unpriv_val]
 df_priv = df[df[p_col] == priv_val]
 
@@ -275,7 +260,7 @@ plt.tight_layout()
 plt.savefig('figura_6_6_tasas_error.png', dpi=300, bbox_inches='tight')
 plt.close()
 
-# FIG 6.7: Disparate Impact
+# FIG 6.7
 plt.figure(figsize=(10, 6))
 di_value = classified_metric_orig.disparate_impact()
 bar_color = '#e67e22' if di_value > 1.25 or di_value < 0.8 else '#2ecc71'
@@ -305,7 +290,7 @@ metric_transf = BinaryLabelDatasetMetric(dataset_transf_train,
                                          privileged_groups=privileged_groups)
 di_mitigado = metric_transf.disparate_impact()
 
-# FIG 6.8: Comparativa Reweighing
+# FIG 6.8
 plt.figure(figsize=(10, 6))
 di_antes = classified_metric_orig.disparate_impact() 
 comparison_data = pd.DataFrame({
@@ -342,7 +327,7 @@ classified_metric_mitigada = ClassificationMetric(dataset_orig, dataset_pred_mit
 eod_antes = classified_metric_orig.equal_opportunity_difference()
 eod_despues = classified_metric_mitigada.equal_opportunity_difference()
 
-# FIG 6.9: Comparativa EqOdds
+# FIG 6.9
 plt.figure(figsize=(10, 6))
 comparison_data_eod = pd.DataFrame({
     'Original (Sesgado)': [eod_antes],
@@ -434,19 +419,54 @@ def generate_pdf_report(auditor, m_orig, m_mit):
         pdf.chapter_title("1. Alcance de la Auditoría")
         pdf.chapter_body(f"Análisis integral de sesgo algorítmico sobre el sistema {config['dataset_name']} focalizado en el atributo protegido '{config['plot_mapping']['protected_col']}'.")
 
-        figuras = [
+        # --- SECCIÓN 1: GRAFICOS DE DIAGNÓSTICO ---
+        figuras_pre = [
             ('figura_6_1_real_por_atributo.png', "Figura 6.1 - Realidad por Atributo Protegido", "Distribución base de los datos históricos."),
             ('figura_6_3_comparacion_real_predicha.png', "Figura 6.3 - Real vs Predicha", "Brecha de predicción entre grupos."),
             ('figura_6_4_matriz_confusion.png', "Figura 6.4 - Matrices de Confusión", "Desglose de errores por grupo."),
             ('figura_6_6_tasas_error.png', "Figura 6.6 - Tasas de Error Dispares", "Comparativa de Falsos Positivos y Falsos Negativos."),
-            ('figura_6_7_disparate_impact.png', "Figura 6.7 - Medición del Disparate Impact", "Cumplimiento legal pre-mitigación."),
-            ('figura_6_8_mitigacion_reweighing.png', "Figura 6.8 - Mitigación: Reweighing", "Resultado del pre-procesamiento."),
-            ('figura_6_9_mitigacion_eqodds.png', "Figura 6.9 - Mitigación: Equal Opportunity", "Resultado del post-procesamiento.")
+            ('figura_6_7_disparate_impact.png', "Figura 6.7 - Medición del Disparate Impact", "Cumplimiento legal pre-mitigación.")
         ]
 
-        for path, title, desc in figuras:
+        for path, title, desc in figuras_pre:
             pdf.add_figure(path, title, desc)
 
+        # --- SECCIÓN 2: DIAGNÓSTICO DE SESGO (TEXTO DINÁMICO) ---
+        pdf.chapter_title("2. Diagnóstico del Sistema Original")
+        st_orig, di_orig, eod_orig = auditor.evaluate_compliance(m_orig, True)
+        
+        if st_orig == "FUERA DE RANGO":
+            mensaje_sesgo = (f"ALERTA DE SESGO: Se ha detectado que el modelo original presenta un sesgo estadístico "
+                             f"sistemático en contra del grupo '{config['plot_mapping']['unpriv_val_name']}'.\n\n"
+                             f"Razón técnica: El cálculo del Impacto Dispar (DI) es de {di_orig:.4f} y la Diferencia "
+                             f"de Igualdad de Oportunidades (EOD) es de {eod_orig:.4f}. Ambos valores se encuentran fuera de los "
+                             f"umbrales éticos y legales definidos en el protocolo de gobernanza ([0.80 - 1.25] para DI y "
+                             f"[-0.10 - 0.10] para EOD). Se requiere mitigación inmediata.")
+            pdf.set_text_color(200, 0, 0) # Rojo para alerta
+        else:
+            mensaje_sesgo = ("CUMPLIMIENTO: El modelo original NO presenta un sesgo estadístico significativo. "
+                             "Las métricas de equidad se encuentran dentro de los umbrales de tolerancia técnica y ética.")
+            pdf.set_text_color(0, 150, 0) # Verde para cumplimiento
+
+        pdf.set_font('Arial', 'B', 10)
+        pdf.multi_cell(0, 7, mensaje_sesgo.encode('latin-1', 'ignore').decode('latin-1'))
+        pdf.set_text_color(0, 0, 0) # Volver a negro
+        pdf.set_font('Arial', '', 10)
+        pdf.ln(5)
+
+        # --- SECCIÓN 3: GRAFICOS DE MITIGACIÓN ---
+        pdf.chapter_title("3. Intervención y Mitigación Técnica")
+        pdf.chapter_body("A continuación se presentan los resultados tras aplicar las técnicas algorítmicas de corrección:")
+        
+        figuras_post = [
+            ('figura_6_8_mitigacion_reweighing.png', "Figura 6.8 - Mitigación: Reweighing", "Resultado de re-ponderación en pre-procesamiento."),
+            ('figura_6_9_mitigacion_eqodds.png', "Figura 6.9 - Mitigación: Equal Opportunity", "Resultado del ajuste de predicciones en post-procesamiento.")
+        ]
+
+        for path, title, desc in figuras_post:
+            pdf.add_figure(path, title, desc)
+
+        # --- SECCIÓN 4 y 5: TABLA Y DICTAMEN FINAL ---
         acc_orig = m_orig.accuracy()
         acc_mit = m_mit.accuracy()
         table_data = [
@@ -455,12 +475,12 @@ def generate_pdf_report(auditor, m_orig, m_mit):
             ['Equal Opportunity Diff', f"{m_orig.equal_opportunity_difference():.4f}", f"{m_mit.equal_opportunity_difference():.4f}", '[-0.10 - 0.10]']
         ]
         
-        pdf.chapter_title("2. Resumen de Métricas")
+        pdf.chapter_title("4. Resumen de Métricas")
         pdf.draw_summary_table(table_data)
 
         st_mit, _, _ = auditor.evaluate_compliance(m_mit, True)
-        pdf.chapter_title("3. Dictamen Final de Certificación")
-        pdf.chapter_body(f"Resultado final de gobernanza: {st_mit}. Fin del reporte.")
+        pdf.chapter_title("5. Dictamen Final de Certificación")
+        pdf.chapter_body(f"Resultado final de gobernanza post-mitigación: {st_mit}. Fin del reporte.")
 
         pdf.output(f"Reporte_Gobernanza_{config['dataset_name'].replace(' ', '_')}.pdf")
         print(f"\n[ÉXITO] Reporte generado: Reporte_Gobernanza_{config['dataset_name'].replace(' ', '_')}.pdf")

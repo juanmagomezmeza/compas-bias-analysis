@@ -1,6 +1,6 @@
 {
   "dataset_name": "ProPublica COMPAS Analysis",
-  "data_path": "compas-scores-two-years.csv",
+  "data_path": "compas_limpio.csv",
   "label_name": "two_year_recid",
   "favorable_classes": [0], 
   "protected_attribute_names": ["race"],
