@@ -77,7 +77,7 @@ function App() {
           <ShieldCheck className="text-emerald-400 w-10 h-10" />
           <div>
             <h1 className="text-3xl font-bold">Gobernanza Algorítmica UI</h1>
-            <p className="text-slate-400 text-sm uppercase tracking-wider font-semibold">Tesis: Auditoría de Sesgos en COMPAS</p>
+            <p className="text-slate-400 text-sm uppercase tracking-wider font-semibold">Tesis: Ética y sesgo en la inteligencia artificial</p>
           </div>
         </header>
 
