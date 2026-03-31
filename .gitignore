@@ -1,3 +1,12 @@
-venv/
+node_modules/
+build/
+.env
 __pycache__/
 *.pyc
+.DS_Store
+# Entorno virtual
+venv/
+
+# Archivos de datos e imágenes
+*.csv
+*.png
