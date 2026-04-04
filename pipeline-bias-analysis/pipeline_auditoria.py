@@ -12,14 +12,14 @@ import seaborn as sns
 from sklearn.metrics import confusion_matrix
 import warnings
 import os
+import sys
 import json
 import argparse
 
 # Importar AIF360
 from aif360.datasets import StandardDataset
 from aif360.metrics import BinaryLabelDatasetMetric, ClassificationMetric
-from aif360.algorithms.preprocessing import Reweighing
-from aif360.algorithms.postprocessing import EqOddsPostprocessing
+from aif360.algorithms.postprocessing import EqOddsPostprocessing, CalibratedEqOddsPostprocessing, RejectOptionClassification
 from fpdf import FPDF
 
 warnings.filterwarnings('ignore')
@@ -45,41 +45,65 @@ class AIGovernanceAuditor:
     def evaluate_compliance(self, metric, is_classification=False):
         di = metric.disparate_impact()
         di_compliant = self.thresholds['disparate_impact'][0] <= di <= self.thresholds['disparate_impact'][1]
-        status = "CUMPLE" if di_compliant else "FUERA DE RANGO"
+        status = "ACEPTADO" if di_compliant else "RECHAZADO"
         
         if is_classification:
             eod = metric.equal_opportunity_difference()
             eod_compliant = self.thresholds['equal_opportunity_diff'][0] <= eod <= self.thresholds['equal_opportunity_diff'][1]
             if not eod_compliant: 
-                status = "FUERA DE RANGO"
+                status = "RECHAZADO"
             return status, di, eod
             
         return status, di
 
-    def print_certification_report(self, original_metric, mitigated_metric, dataset_name):
+    def print_certification_report(self, m_orig, m_eq, m_cal, m_roc, dataset_name, mitigation_applied):
         print("\n" + "="*70)
         print("REPORTE DE CERTIFICACIÓN DE GOBERNANZA ALGORÍTMICA")
         print("="*70)
         
-        st_orig, di_orig, eod_orig = self.evaluate_compliance(original_metric, True)
-        st_mit, di_mit, eod_mit = self.evaluate_compliance(mitigated_metric, True)
-        
+        st_orig, di_orig, eod_orig = self.evaluate_compliance(m_orig, True)
         print(f"[CAJA NEGRA] SISTEMA ORIGINAL ({dataset_name}): {st_orig}")
         print(f"  > Disparate Impact: {di_orig:.4f} | Equal Opp. Diff: {eod_orig:.4f}")
-        print(f"\n[PROPUESTA] SISTEMA MITIGADO (Post-procesamiento): {st_mit}")
-        print(f"  > Disparate Impact: {di_mit:.4f} | Equal Opp. Diff: {eod_mit:.4f}")
         
-        print("\nDICTAMEN TÉCNICO:")
-        if st_mit == "CUMPLE":
-            print("✓ APROBADO: El sistema mitigado es apto para despliegue bajo supervisión humana.")
+        if mitigation_applied:
+            st_eq, di_eq, eod_eq = self.evaluate_compliance(m_eq, True)
+            print(f"\n[INTERVENCIÓN 1] EQUALIZED ODDS: {st_eq}")
+            print(f"  > Disparate Impact: {di_eq:.4f} | Equal Opp. Diff: {eod_eq:.4f}")
+            
+            st_cal, di_cal, eod_cal = self.evaluate_compliance(m_cal, True)
+            print(f"\n[INTERVENCIÓN 2] CALIBRATED EQUALIZED ODDS: {st_cal}")
+            print(f"  > Disparate Impact: {di_cal:.4f} | Equal Opp. Diff: {eod_cal:.4f}")
+
+            st_roc, di_roc, eod_roc = self.evaluate_compliance(m_roc, True)
+            print(f"\n[INTERVENCIÓN 3] REJECT OPTION CLASSIFICATION (ROC): {st_roc}")
+            print(f"  > Disparate Impact: {di_roc:.4f} | Equal Opp. Diff: {eod_roc:.4f}")
+            
+            # Evaluar cuáles estrategias demostraron viabilidad técnica
+            estrategias_cumplen = []
+            if st_eq == "ACEPTADO": estrategias_cumplen.append("Eq. Odds")
+            if st_cal == "ACEPTADO": estrategias_cumplen.append("Cal. EqOdds")
+            if st_roc == "ACEPTADO": estrategias_cumplen.append("ROC")
+            
+            if estrategias_cumplen:
+                print(f"\n[INFO TÉCNICA] Las intervenciones {', '.join(estrategias_cumplen)} logran corregir matemáticamente el sesgo.")
+            
+            # NUEVA LÓGICA ESTRICTA: Si se aplicó mitigación, es porque el original falló. El dictamen es RECHAZADO.
+            status_final = "RECHAZADO"
         else:
-            print("⚠ RECHAZADO: Se requiere mayor ajuste algorítmico o revisión de la arquitectura.")
+            print("\n[INFO] No se aplicó mitigación algorítmica por encontrarse dentro de los umbrales éticos.")
+            status_final = st_orig
+        
+        print("\nDICTAMEN TÉCNICO FINAL:")
+        if status_final == "ACEPTADO":
+            print("\033[92m✓ APROBADO: El sistema base es apto para despliegue sin intervenciones.\033[0m")
+        else:
+            print("\033[91m⚠ RECHAZADO: El modelo original ('Caja Negra') presenta sesgos inaceptables. Su certificación es denegada, independientemente de la viabilidad del post-procesamiento.\033[0m")
         print("="*70)
 
 # =============================================================================
-# [1/9] CARGA DE CONFIGURACIÓN Y DATOS
+# [PASO 4] CARGA DE CONFIGURACIÓN Y DATOS
 # =============================================================================
-print("\n[1/9] Cargando configuración y dataset...")
+print("\n[Paso 4] Cargando configuración y dataset...")
 
 parser = argparse.ArgumentParser(description="Pipeline de Auditoría de Gobernanza Algorítmica")
 parser.add_argument('--config', type=str, default='config.json', help='Ruta al archivo de configuración JSON')
@@ -87,23 +111,24 @@ args = parser.parse_args()
 config_path = args.config
 
 if not os.path.exists(config_path):
-    raise FileNotFoundError(f"ERROR: No se encontró el archivo de configuración '{config_path}'.")
+    print("\n❌ ERROR CRÍTICO: No se encontró el archivo de configuración.")
+    print(f"   Ruta buscada: {os.path.abspath(config_path)}")
+    sys.exit(1)
 
 with open(config_path, 'r') as f:
     config = json.load(f)
 
-print(f"[*] Configuración: {config_path} | Dataset: {config['dataset_name']}")
+data_path = config.get('data_path', '')
+if not os.path.exists(data_path):
+    print("\n❌ ERROR CRÍTICO: No se encontró el dataset CSV.")
+    print(f"   Ruta buscada: {os.path.abspath(data_path) if data_path else 'No definida en el JSON'}")
+    sys.exit(1)
 
-if not os.path.exists(config['data_path']):
-    raise FileNotFoundError(f"ERROR: No se encontró el dataset en '{config['data_path']}'. Ejecuta primero el script de preparación de datos (ETL).")
-
-df_raw = pd.read_csv(config['data_path'])
+df_raw = pd.read_csv(data_path)
 df = df_raw[config['features_to_keep']].copy()
 df = df.dropna()
 
-# Extraer variables de ploteo
 p_col = config['plot_mapping']['protected_col']
-sec_col = config['plot_mapping'].get('secondary_col', None)
 t_col = config['plot_mapping']['target_label_col']
 t_name = config['plot_mapping']['target_label_name']
 priv_val = config['plot_mapping']['priv_val_name']
@@ -111,33 +136,21 @@ unpriv_val = config['plot_mapping']['unpriv_val_name']
 risk_col = config['plot_mapping']['risk_score_col']
 risk_thresh = config['plot_mapping']['risk_threshold']
 
-# Preprocesamiento genérico para gráficos
 df['target_label_text'] = df[t_col].map({1: f'Positivo ({t_name})', 0: f'Negativo (No {t_name})'})
 df['predicted_high_risk'] = (df[risk_col] >= risk_thresh).astype(int)
 df['target_binary'] = df[t_col].astype(int)
-
-# Filtrar solo los grupos de interés
 df = df[df[p_col].isin([priv_val, unpriv_val])]
 
-# =============================================================================
-# [2/9] CONFIGURACIÓN DE AIF360 Y GRUPOS
-# =============================================================================
-print("\n[2/9] Configurando Auditoría AIF360 dinámicamente...")
-
-df_for_aif = df[config['features_to_keep']].copy()
-cat_cols = df_for_aif.select_dtypes(include=['object', 'string', 'category']).columns.tolist()
-
+print("\n[*] Configurando Auditoría AIF360 dinámicamente...")
+cat_cols = df[config['features_to_keep']].select_dtypes(include=['object', 'string', 'category']).columns.tolist()
 for col in config['protected_attribute_names'] + [config['label_name']]:
-    if col in cat_cols:
-        cat_cols.remove(col)
+    if col in cat_cols: cat_cols.remove(col)
 
 dataset_orig = StandardDataset(
-    df=df_for_aif,
-    label_name=config['label_name'],
+    df=df[config['features_to_keep']], label_name=config['label_name'],
     favorable_classes=config['favorable_classes'],
     protected_attribute_names=config['protected_attribute_names'],
-    privileged_classes=config['privileged_classes'],
-    categorical_features=cat_cols
+    privileged_classes=config['privileged_classes'], categorical_features=cat_cols
 )
 
 protected_attr_name = config['protected_attribute_names'][0]
@@ -147,28 +160,22 @@ unprivileged_groups = [{protected_attr_name: 0.0}]
 dataset_pred = dataset_orig.copy(deepcopy=True)
 dataset_pred.labels = df['predicted_high_risk'].values.reshape(-1, 1)
 
+# Normalizar los puntajes de riesgo (0 a 1) para que RejectOptionClassification funcione correctamente
+scores_norm = ((df[risk_col] - df[risk_col].min()) / (df[risk_col].max() - df[risk_col].min())).values.reshape(-1, 1)
+dataset_orig.scores = scores_norm
+dataset_pred.scores = scores_norm
+
 # =============================================================================
-# [3/9] AUDITORÍA INICIAL (CAJA NEGRA)
+# [PASO 5] CÁLCULO DE MÉTRICAS (AUDITORÍA INICIAL)
 # =============================================================================
-print("\n[3/9] Ejecutando Auditoría Inicial...")
+print("\n[Paso 5] Ejecutando Auditoría Inicial...")
 gov_auditor = AIGovernanceAuditor(privileged_groups, unprivileged_groups)
-
-metric_orig = BinaryLabelDatasetMetric(dataset_orig, 
-                                       unprivileged_groups=unprivileged_groups,
-                                       privileged_groups=privileged_groups)
-
-classified_metric_orig = ClassificationMetric(dataset_orig, dataset_pred,
-                                              unprivileged_groups=unprivileged_groups,
-                                              privileged_groups=privileged_groups)
-
-print(f"Disparate Impact (Datos): {metric_orig.disparate_impact():.4f}")
-print(f"Disparate Impact (Predicciones): {classified_metric_orig.disparate_impact():.4f}")
-print(f"Equal Opportunity Difference: {classified_metric_orig.equal_opportunity_difference():.4f}")
+classified_metric_orig = ClassificationMetric(dataset_orig, dataset_pred, unprivileged_groups=unprivileged_groups, privileged_groups=privileged_groups)
 
 # =============================================================================
-# [4/9] GENERACIÓN DE VISUALIZACIONES DESCRIPTIVAS DINÁMICAS
+# [PASO 6] GENERACIÓN DE VISUALIZACIONES DESCRIPTIVAS
 # =============================================================================
-print("\n[4/9] Generando Figuras Descriptivas...")
+print("\n[Paso 6] Generando Figuras Descriptivas base y de Diagnóstico...")
 
 # FIG 6.1
 plt.figure(figsize=(10, 6))
@@ -183,21 +190,6 @@ for container in ax.containers: ax.bar_label(container, fmt='%.1f%%', padding=3)
 plt.tight_layout()
 plt.savefig('figura_6_1_real_por_atributo.png', dpi=300, bbox_inches='tight')
 plt.close()
-
-# FIG 6.2
-if sec_col in df.columns:
-    plt.figure(figsize=(10, 6))
-    risk_sec = pd.crosstab(df[sec_col], df['target_label_text'], normalize='index') * 100
-    ax = risk_sec.plot(kind='bar', stacked=False, color=['#2ecc71', '#e74c3c'], width=0.7)
-    plt.title(f'Distribución de {t_name} Real por {sec_col.capitalize()}', fontsize=14, fontweight='bold', pad=20)
-    plt.xlabel(f'Grupo ({sec_col})', fontsize=12, fontweight='bold')
-    plt.ylabel('Porcentaje (%)', fontsize=12, fontweight='bold')
-    plt.xticks(rotation=0)
-    plt.legend(title=f'{t_name} Real', bbox_to_anchor=(1.05, 1), loc='upper left')
-    for container in ax.containers: ax.bar_label(container, fmt='%.1f%%', padding=3)
-    plt.tight_layout()
-    plt.savefig('figura_6_2_real_por_secundario.png', dpi=300, bbox_inches='tight')
-    plt.close()
 
 # FIG 6.3
 plt.figure(figsize=(12, 6))
@@ -234,20 +226,39 @@ plt.tight_layout(rect=[0, 0, 1, 0.96])
 plt.savefig('figura_6_4_matriz_confusion.png', dpi=300, bbox_inches='tight')
 plt.close()
 
+# FIG 6.5 - Distribución de Scores (Violin Plot)
+plt.figure(figsize=(12, 6))
+paleta_violines = {
+    f'Positivo ({t_name})': '#e74c3c',   # Rojo: Reincidió
+    f'Negativo (No {t_name})': '#2ecc71' # Verde: No reincidió
+}
+
+sns.violinplot(
+    data=df,
+    x=p_col,
+    y=risk_col,
+    hue='target_label_text',
+    split=True,
+    inner="quart",
+    palette=paleta_violines
+)
+plt.title(f'Distribución de Scores de {t_name} por {p_col.capitalize()}', fontsize=14, fontweight='bold', pad=20)
+plt.xlabel(f'Grupo ({p_col})', fontsize=12, fontweight='bold')
+plt.ylabel('Puntaje de Riesgo (Score)', fontsize=12, fontweight='bold')
+plt.legend(title=f'{t_name} Real', bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.tight_layout()
+plt.savefig('figura_6_5_distribucion_scores.png', dpi=300, bbox_inches='tight')
+plt.close()
+
 # FIG 6.6
 df_unpriv = df[df[p_col] == unpriv_val]
 df_priv = df[df[p_col] == priv_val]
-
 fpr_unpriv = ((df_unpriv['target_binary'] == 0) & (df_unpriv['predicted_high_risk'] == 1)).sum() / ((df_unpriv['target_binary'] == 0)).sum() * 100
 fpr_priv = ((df_priv['target_binary'] == 0) & (df_priv['predicted_high_risk'] == 1)).sum() / ((df_priv['target_binary'] == 0)).sum() * 100
 fnr_unpriv = ((df_unpriv['target_binary'] == 1) & (df_unpriv['predicted_high_risk'] == 0)).sum() / ((df_unpriv['target_binary'] == 1)).sum() * 100
 fnr_priv = ((df_priv['target_binary'] == 1) & (df_priv['predicted_high_risk'] == 0)).sum() / ((df_priv['target_binary'] == 1)).sum() * 100
 
-error_data = pd.DataFrame({
-    'Falsos Positivos (Sesgo en contra)': [fpr_unpriv, fpr_priv],
-    'Falsos Negativos (Sesgo a favor)': [fnr_unpriv, fnr_priv]
-}, index=[unpriv_val, priv_val])
-
+error_data = pd.DataFrame({'Falsos Positivos (Sesgo en contra)': [fpr_unpriv, fpr_priv], 'Falsos Negativos (Sesgo a favor)': [fnr_unpriv, fnr_priv]}, index=[unpriv_val, priv_val])
 plt.figure(figsize=(10, 6))
 ax = error_data.plot(kind='bar', width=0.7, color=['#e74c3c', '#3498db'])
 plt.title(f'Tasas de Error del Modelo por {p_col.capitalize()}', fontsize=14, fontweight='bold', pad=20)
@@ -260,7 +271,7 @@ plt.tight_layout()
 plt.savefig('figura_6_6_tasas_error.png', dpi=300, bbox_inches='tight')
 plt.close()
 
-# FIG 6.7
+# FIG 6.7a - Diagnóstico: DI
 plt.figure(figsize=(10, 6))
 di_value = classified_metric_orig.disparate_impact()
 bar_color = '#e67e22' if di_value > 1.25 or di_value < 0.8 else '#2ecc71'
@@ -269,135 +280,172 @@ plt.axhline(y=1.0, color='black', linestyle='-', linewidth=2, label='Equidad Ide
 plt.axhline(y=0.8, color='#e74c3c', linestyle='--', linewidth=1.5, label='Umbral Mínimo (0.8)')
 plt.axhline(y=1.25, color='#e74c3c', linestyle='--', linewidth=1.5, label='Umbral Máximo (1.25)')
 plt.axhspan(0.8, 1.25, color='#2ecc71', alpha=0.1)
-plt.title('Medición del Disparate Impact en Predicciones', fontsize=14, fontweight='bold', pad=20)
+plt.title('Diagnóstico: Medición de Disparate Impact', fontsize=14, fontweight='bold', pad=20)
 plt.ylabel('Ratio', fontsize=12, fontweight='bold')
-plt.ylim(0, max(di_value + 0.6, 2.0)) 
+plt.ylim(0, max(di_value + 0.6, 2.0))
 plt.legend(loc='upper right', framealpha=0.95)
 plt.text(0, di_value + 0.03, f'{di_value:.4f}', ha='center', va='bottom', fontweight='bold', fontsize=12, color=bar_color)
 plt.tight_layout()
 plt.savefig('figura_6_7_disparate_impact.png', dpi=300, bbox_inches='tight')
 plt.close()
 
-# =============================================================================
-# [5/9] MITIGACIÓN 1: PRE-PROCESAMIENTO (REWEIGHING)
-# =============================================================================
-print("\n[5/9] Ejecutando Mitigación de Pre-procesamiento (Reweighing)...")
-RW = Reweighing(unprivileged_groups=unprivileged_groups, privileged_groups=privileged_groups)
-dataset_transf_train = RW.fit_transform(dataset_orig)
-
-metric_transf = BinaryLabelDatasetMetric(dataset_transf_train,
-                                         unprivileged_groups=unprivileged_groups,
-                                         privileged_groups=privileged_groups)
-di_mitigado = metric_transf.disparate_impact()
-
-# FIG 6.8
+# FIG 6.7b - Diagnóstico: EOD
 plt.figure(figsize=(10, 6))
-di_antes = classified_metric_orig.disparate_impact() 
-comparison_data = pd.DataFrame({
-    'Disparate Impact\n(Original)': [di_antes],
-    'Disparate Impact\n(Mitigado)': [di_mitigado]
-})
-ax = comparison_data.plot(kind='bar', color=['#e74c3c', '#2ecc71'], width=0.5)
-plt.title('Eficacia de Mitigación: Reweighing', fontsize=14, fontweight='bold', pad=20)
-plt.ylabel('Ratio', fontsize=12, fontweight='bold')
-plt.ylim(0, max(di_antes, di_mitigado) + 0.3)
-plt.xticks(rotation=0)
-plt.axhline(y=1.0, color='black', linestyle='-', linewidth=2, label='Equidad Ideal (1.0)')
-plt.axhline(y=0.8, color='black', linestyle='--', linewidth=1, alpha=0.5)
-plt.axhline(y=1.25, color='black', linestyle='--', linewidth=1, alpha=0.5)
-plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-for container in ax.containers: ax.bar_label(container, fmt='%.4f', padding=3, fontweight='bold')
-plt.tight_layout()
-plt.savefig('figura_6_8_mitigacion_reweighing.png', dpi=300, bbox_inches='tight')
-plt.close()
-
-# =============================================================================
-# [6/9] MITIGACIÓN 2: POST-PROCESAMIENTO (EQUALIZED ODDS)
-# =============================================================================
-print("\n[6/9] Ejecutando Mitigación de Post-procesamiento (EqOdds)...")
-eq_odds = EqOddsPostprocessing(privileged_groups=privileged_groups,
-                               unprivileged_groups=unprivileged_groups,
-                               seed=42)
-eq_odds.fit(dataset_orig, dataset_pred)
-dataset_pred_mitigado = eq_odds.predict(dataset_pred)
-
-classified_metric_mitigada = ClassificationMetric(dataset_orig, dataset_pred_mitigado,
-                                                  unprivileged_groups=unprivileged_groups,
-                                                  privileged_groups=privileged_groups)
-eod_antes = classified_metric_orig.equal_opportunity_difference()
-eod_despues = classified_metric_mitigada.equal_opportunity_difference()
-
-# FIG 6.9
-plt.figure(figsize=(10, 6))
-comparison_data_eod = pd.DataFrame({
-    'Original (Sesgado)': [eod_antes],
-    'Mitigado (Post-proc)': [eod_despues]
-})
-ax = comparison_data_eod.plot(kind='bar', color=['#e74c3c', '#2ecc71'], width=0.5)
-plt.title('Eficacia de Mitigación: Equal Opportunity Difference', fontsize=14, fontweight='bold', pad=20)
-plt.ylabel('Diferencia en Tasa Verdaderos Positivos', fontsize=12, fontweight='bold')
-y_max = max(abs(eod_antes), abs(eod_despues)) + 0.1
-plt.ylim(-y_max, y_max)
-plt.xticks(rotation=0)
+eod_value = classified_metric_orig.equal_opportunity_difference()
+bar_color_eod = '#e67e22' if abs(eod_value) > 0.1 else '#2ecc71'
+plt.bar(['Equal Opportunity Diff\n(Predicciones)'], [eod_value], color=bar_color_eod, width=0.35)
 plt.axhline(y=0.0, color='black', linestyle='-', linewidth=2, label='Equidad Ideal (0.0)')
-plt.axhspan(-0.1, 0.1, color='#2ecc71', alpha=0.1, label='Rango Aceptable')
-plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-for container in ax.containers: ax.bar_label(container, labels=[f'{val:.4f}' for val in container.datavalues], padding=3, fontweight='bold')
+plt.axhline(y=-0.1, color='#e74c3c', linestyle='--', linewidth=1.5, label='Umbral Mínimo (-0.1)')
+plt.axhline(y=0.1, color='#e74c3c', linestyle='--', linewidth=1.5, label='Umbral Máximo (0.1)')
+plt.axhspan(-0.1, 0.1, color='#2ecc71', alpha=0.1)
+plt.title('Diagnóstico: Medición de Equal Opportunity Difference', fontsize=14, fontweight='bold', pad=20)
+plt.ylabel('Diferencia', fontsize=12, fontweight='bold')
+y_max_eod = max(abs(eod_value) + 0.1, 0.2)
+plt.ylim(-y_max_eod, y_max_eod)
+plt.legend(loc='upper right', framealpha=0.95)
+plt.text(0, eod_value + (0.02 if eod_value > 0 else -0.05), f'{eod_value:.4f}', ha='center', va='bottom', fontweight='bold', fontsize=12, color=bar_color_eod)
 plt.tight_layout()
-plt.savefig('figura_6_9_mitigacion_eqodds.png', dpi=300, bbox_inches='tight')
+plt.savefig('figura_6_7_b_equal_opportunity.png', dpi=300, bbox_inches='tight')
 plt.close()
 
 # =============================================================================
-# [7/9] CERTIFICACIÓN FINAL
+# [PASO 7 y 8] DECISIÓN Y LABORATORIO DE POST-PROCESAMIENTO
 # =============================================================================
-print("\n[7/9] Evaluando métricas finales...")
-gov_auditor.print_certification_report(classified_metric_orig, classified_metric_mitigada, config['dataset_name'])
+print("\n[Paso 7] Validando presencia de sesgo...")
+status_inicial, di_inicial, eod_inicial = gov_auditor.evaluate_compliance(classified_metric_orig, True)
+
+mitigation_applied = False
+classified_metric_eq = None
+classified_metric_cal = None
+classified_metric_roc = None
+
+if status_inicial == "RECHAZADO":
+    print("⚠ ALERTA: Las métricas exceden los umbrales éticos.")
+    print("Iniciando laboratorio comparativo de Post-procesamiento...")
+    mitigation_applied = True
+    
+    # --- RUTA A: Equalized Odds ---
+    print("\n[Paso 8.A] Ejecutando Equalized Odds...")
+    eq_odds = EqOddsPostprocessing(privileged_groups=privileged_groups, unprivileged_groups=unprivileged_groups, seed=42)
+    eq_odds.fit(dataset_orig, dataset_pred)
+    dataset_pred_eq = eq_odds.predict(dataset_pred)
+    classified_metric_eq = ClassificationMetric(dataset_orig, dataset_pred_eq,
+                                                unprivileged_groups=unprivileged_groups, privileged_groups=privileged_groups)
+    di_eq = classified_metric_eq.disparate_impact()
+    eod_eq = classified_metric_eq.equal_opportunity_difference()
+    
+    # --- RUTA B: Calibrated Equalized Odds ---
+    print("\n[Paso 8.B] Ejecutando Calibrated Equalized Odds...")
+    cal_eq_odds = CalibratedEqOddsPostprocessing(privileged_groups=privileged_groups, unprivileged_groups=unprivileged_groups, cost_constraint='fnr', seed=42)
+    cal_eq_odds.fit(dataset_orig, dataset_pred)
+    dataset_pred_cal = cal_eq_odds.predict(dataset_pred)
+    classified_metric_cal = ClassificationMetric(dataset_orig, dataset_pred_cal,
+                                                 unprivileged_groups=unprivileged_groups, privileged_groups=privileged_groups)
+    di_cal = classified_metric_cal.disparate_impact()
+    eod_cal = classified_metric_cal.equal_opportunity_difference()
+    
+    # --- RUTA C: Reject Option Classification ---
+    print("\n[Paso 8.C] Ejecutando Reject Option Classification (ROC)...")
+    roc = RejectOptionClassification(unprivileged_groups=unprivileged_groups, privileged_groups=privileged_groups)
+    roc.fit(dataset_orig, dataset_pred)
+    dataset_pred_roc = roc.predict(dataset_pred)
+    classified_metric_roc = ClassificationMetric(dataset_orig, dataset_pred_roc,
+                                                 unprivileged_groups=unprivileged_groups, privileged_groups=privileged_groups)
+    di_roc = classified_metric_roc.disparate_impact()
+    eod_roc = classified_metric_roc.equal_opportunity_difference()
+    
+    # --- GRÁFICOS COMPARATIVOS DE LOS ALGORITMOS ---
+    print("\n[Paso 9] Generando gráficos de evaluación del Post-procesamiento...")
+    algoritmos = ['Original', 'Eq. Odds', 'Calibrated\nEq. Odds', 'ROC']
+    colores = ['#e74c3c', '#3498db', '#9b59b6', '#2ecc71']
+
+    # FIG 6.8 (Evolución DI)
+    plt.figure(figsize=(11, 6))
+    bars = plt.bar(algoritmos, [di_inicial, di_eq, di_cal, di_roc], color=colores, width=0.5)
+    plt.title('Comparativa de Mitigación: Disparate Impact (DI)', fontsize=14, fontweight='bold', pad=20)
+    plt.axhline(y=1.0, color='black', linestyle='-', linewidth=2, label='Ideal (1.0)')
+    plt.axhline(y=0.8, color='#e74c3c', linestyle='--', linewidth=1.5, label='Umbral (0.8 a 1.25)')
+    plt.axhline(y=1.25, color='#e74c3c', linestyle='--', linewidth=1.5)
+    plt.axhspan(0.8, 1.25, color='#2ecc71', alpha=0.1, label='Rango Aceptable')
+    plt.ylabel('Ratio')
+    for bar in bars:
+        yval = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2, yval + 0.02, f'{yval:.4f}', ha='center', va='bottom', fontweight='bold')
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    plt.savefig('figura_6_8_evolucion_di.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # FIG 6.9 (Evolución EOD)
+    plt.figure(figsize=(11, 6))
+    bars = plt.bar(algoritmos, [eod_inicial, eod_eq, eod_cal, eod_roc], color=colores, width=0.5)
+    plt.title('Comparativa de Mitigación: Equal Opportunity Diff (EOD)', fontsize=14, fontweight='bold', pad=20)
+    plt.axhline(y=0.0, color='black', linestyle='-', linewidth=2, label='Ideal (0.0)')
+    plt.axhline(y=-0.1, color='#e74c3c', linestyle='--', linewidth=1.5, label='Umbral (-0.1 a 0.1)')
+    plt.axhline(y=0.1, color='#e74c3c', linestyle='--', linewidth=1.5)
+    plt.axhspan(-0.1, 0.1, color='#2ecc71', alpha=0.1, label='Rango Aceptable')
+    plt.ylabel('Diferencia')
+    for bar in bars:
+        yval = bar.get_height()
+        offset = 0.01 if yval > 0 else -0.05
+        plt.text(bar.get_x() + bar.get_width()/2, yval + offset, f'{yval:.4f}', ha='center', va='bottom', fontweight='bold')
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    plt.savefig('figura_6_9_evolucion_eod.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+else:
+    print("✓ CUMPLIMIENTO: No se detectó sesgo significativo. Saltando mitigación...")
+
 
 # =============================================================================
-# [8/9 & 9/9] GENERACIÓN DE REPORTE DE GOBERNANZA EN PDF 
+# [PASO 10 y 11] COMPILACIÓN Y REPORTE PDF FINAL
 # =============================================================================
+print("\n[Paso 10] Evaluando métricas finales para el dictamen...")
+gov_auditor.print_certification_report(classified_metric_orig, classified_metric_eq, classified_metric_cal, classified_metric_roc, config['dataset_name'], mitigation_applied)
+
 class GovernancePDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 15)
-        title = 'Reporte de Auditoría de Gobernanza Algorítmica'.encode('latin-1', 'ignore').decode('latin-1')
-        self.cell(0, 10, title, 0, 1, 'C')
+        self.cell(0, 10, 'Reporte de Auditoría de Gobernanza Algorítmica'.encode('latin-1', 'ignore').decode('latin-1'), 0, 1, 'C')
         self.set_font('Arial', '', 10)
-        subtitle = f"Sistema: {config['dataset_name']} | Auditoría automatizada".encode('latin-1', 'ignore').decode('latin-1')
-        self.cell(0, 10, subtitle, 0, 1, 'C')
+        self.cell(0, 10, f"Sistema: {config['dataset_name']} | Auditoría automatizada".encode('latin-1', 'ignore').decode('latin-1'), 0, 1, 'C')
         self.ln(5)
 
     def chapter_title(self, title):
         if self.get_y() > 230: self.add_page()
         self.set_font('Arial', 'B', 12)
         self.set_fill_color(230, 230, 230)
-        safe_title = title.encode('latin-1', 'ignore').decode('latin-1')
-        self.cell(0, 10, safe_title, 0, 1, 'L', fill=True)
+        self.cell(0, 10, title.encode('latin-1', 'ignore').decode('latin-1'), 0, 1, 'L', fill=True)
         self.ln(4)
 
     def chapter_body(self, text):
         self.set_font('Arial', '', 10)
-        safe_text = text.encode('latin-1', 'ignore').decode('latin-1')
-        self.multi_cell(0, 7, safe_text)
+        self.multi_cell(0, 7, text.encode('latin-1', 'ignore').decode('latin-1'))
         self.ln(2)
-
+        
     def add_figure(self, image_path, title, explanation):
         if os.path.exists(image_path):
             self.chapter_title(title)
-            self.image(image_path, x=65, w=80) 
+            self.image(image_path, x=60, w=90) 
             self.ln(2)
             self.chapter_body(explanation)
             self.ln(5)
 
-    def draw_summary_table(self, data):
-        self.set_font('Arial', 'B', 9)
+    def draw_summary_table(self, data, mitigated):
+        self.set_font('Arial', 'B', 8)
         self.set_fill_color(52, 152, 219)
         self.set_text_color(255, 255, 255)
-        w = [60, 42, 42, 42] 
-        headers = ['Métrica', 'Modelo Orig.', 'Modelo Mitig.', 'Umbral Óptimo']
+        
+        # Ancho ajustado (columna 1 de 40 a 50) para asegurar que quepan las traducciones
+        w = [50, 24, 24, 24, 24, 28] if mitigated else [80, 50, 50]
+        headers = ['Métrica', 'Original', 'Eq. Odds', 'Cal. EqOdds', 'ROC', 'Umbral Óptimo'] if mitigated else ['Métrica', 'Valor Obtenido', 'Umbral Óptimo']
+        
         for i in range(len(headers)):
             self.cell(w[i], 10, headers[i].encode('latin-1', 'ignore').decode('latin-1'), 1, 0, 'C', fill=True)
         self.ln()
-        self.set_font('Arial', '', 9)
+        
+        self.set_font('Arial', '', 8)
         self.set_text_color(0, 0, 0)
         self.set_fill_color(245, 245, 245)
         fill = False
@@ -409,8 +457,8 @@ class GovernancePDF(FPDF):
             fill = not fill
         self.ln(5)
 
-def generate_pdf_report(auditor, m_orig, m_mit):
-    print("\n[9/9] Generando PDF de reporte...")
+def generate_pdf_report(auditor, m_orig, m_eq, m_cal, m_roc, mitigated):
+    print("\n[Paso 11] Generando PDF de reporte...")
     try:
         pdf = GovernancePDF()
         pdf.set_auto_page_break(auto=True, margin=15)
@@ -419,68 +467,92 @@ def generate_pdf_report(auditor, m_orig, m_mit):
         pdf.chapter_title("1. Alcance de la Auditoría")
         pdf.chapter_body(f"Análisis integral de sesgo algorítmico sobre el sistema {config['dataset_name']} focalizado en el atributo protegido '{config['plot_mapping']['protected_col']}'.")
 
-        # --- SECCIÓN 1: GRAFICOS DE DIAGNÓSTICO ---
         figuras_pre = [
             ('figura_6_1_real_por_atributo.png', "Figura 6.1 - Realidad por Atributo Protegido", "Distribución base de los datos históricos."),
             ('figura_6_3_comparacion_real_predicha.png', "Figura 6.3 - Real vs Predicha", "Brecha de predicción entre grupos."),
             ('figura_6_4_matriz_confusion.png', "Figura 6.4 - Matrices de Confusión", "Desglose de errores por grupo."),
+            ('figura_6_5_distribucion_scores.png', "Figura 6.5 - Distribución de Scores de Riesgo", "Densidad de los puntajes asignados, divididos por grupo y resultado real (verde: no reincidió, rojo: reincidió)."),
             ('figura_6_6_tasas_error.png', "Figura 6.6 - Tasas de Error Dispares", "Comparativa de Falsos Positivos y Falsos Negativos."),
-            ('figura_6_7_disparate_impact.png', "Figura 6.7 - Medición del Disparate Impact", "Cumplimiento legal pre-mitigación.")
+            ('figura_6_7_disparate_impact.png', "Figura 6.7a - Diagnóstico: Disparate Impact", "Cumplimiento de paridad estadística pre-mitigación."),
+            ('figura_6_7_b_equal_opportunity.png', "Figura 6.7b - Diagnóstico: Equal Opportunity Diff", "Cumplimiento de igualdad de oportunidades pre-mitigación.")
         ]
-
         for path, title, desc in figuras_pre:
             pdf.add_figure(path, title, desc)
 
-        # --- SECCIÓN 2: DIAGNÓSTICO DE SESGO (TEXTO DINÁMICO) ---
-        pdf.chapter_title("2. Diagnóstico del Sistema Original")
+        pdf.chapter_title("2. Diagnóstico del Sistema (Caja Negra)")
         st_orig, di_orig, eod_orig = auditor.evaluate_compliance(m_orig, True)
         
-        if st_orig == "FUERA DE RANGO":
-            mensaje_sesgo = (f"ALERTA DE SESGO: Se ha detectado que el modelo original presenta un sesgo estadístico "
-                             f"sistemático en contra del grupo '{config['plot_mapping']['unpriv_val_name']}'.\n\n"
-                             f"Razón técnica: El cálculo del Impacto Dispar (DI) es de {di_orig:.4f} y la Diferencia "
-                             f"de Igualdad de Oportunidades (EOD) es de {eod_orig:.4f}. Ambos valores se encuentran fuera de los "
-                             f"umbrales éticos y legales definidos en el protocolo de gobernanza ([0.80 - 1.25] para DI y "
-                             f"[-0.10 - 0.10] para EOD). Se requiere mitigación inmediata.")
-            pdf.set_text_color(200, 0, 0) # Rojo para alerta
+        if mitigated:
+            mensaje = (f"ALERTA DE SESGO: Se detectó que el modelo original presenta un sesgo estadístico. "
+                       f"Impacto Dispar (DI) = {di_orig:.4f} | Diferencia Igualdad Oportunidades (EOD) = {eod_orig:.4f}. "
+                       f"Al tratarse de una Caja Negra, se procede a aplicar 3 técnicas de mitigación de Post-procesamiento.")
+            pdf.set_text_color(200, 0, 0)
         else:
-            mensaje_sesgo = ("CUMPLIMIENTO: El modelo original NO presenta un sesgo estadístico significativo. "
-                             "Las métricas de equidad se encuentran dentro de los umbrales de tolerancia técnica y ética.")
-            pdf.set_text_color(0, 150, 0) # Verde para cumplimiento
+            mensaje = (f"CUMPLIMIENTO: El modelo analizado NO presenta un sesgo estadístico significativo. "
+                       f"Impacto Dispar (DI) = {di_orig:.4f} | Diferencia Igualdad Oportunidades (EOD) = {eod_orig:.4f}. "
+                       f"Las métricas se encuentran dentro de los umbrales de tolerancia.")
+            pdf.set_text_color(0, 150, 0)
 
         pdf.set_font('Arial', 'B', 10)
-        pdf.multi_cell(0, 7, mensaje_sesgo.encode('latin-1', 'ignore').decode('latin-1'))
-        pdf.set_text_color(0, 0, 0) # Volver a negro
+        pdf.multi_cell(0, 7, mensaje.encode('latin-1', 'ignore').decode('latin-1'))
+        pdf.set_text_color(0, 0, 0)
         pdf.set_font('Arial', '', 10)
         pdf.ln(5)
 
-        # --- SECCIÓN 3: GRAFICOS DE MITIGACIÓN ---
-        pdf.chapter_title("3. Intervención y Mitigación Técnica")
-        pdf.chapter_body("A continuación se presentan los resultados tras aplicar las técnicas algorítmicas de corrección:")
-        
-        figuras_post = [
-            ('figura_6_8_mitigacion_reweighing.png', "Figura 6.8 - Mitigación: Reweighing", "Resultado de re-ponderación en pre-procesamiento."),
-            ('figura_6_9_mitigacion_eqodds.png', "Figura 6.9 - Mitigación: Equal Opportunity", "Resultado del ajuste de predicciones en post-procesamiento.")
-        ]
+        if mitigated:
+            pdf.chapter_title("3. Laboratorio Comparativo de Mitigación (Post-procesamiento)")
+            pdf.chapter_body("Resultados del impacto de Equalized Odds, Calibrated Equalized Odds y Reject Option Classification sobre las métricas finales:")
+            figuras_post = [
+                ('figura_6_8_evolucion_di.png', "Figura 6.8 - Evolución: Disparate Impact", "Efecto comparativo sobre el balance demográfico global de las predicciones."),
+                ('figura_6_9_evolucion_eod.png', "Figura 6.9 - Evolución: Equal Opportunity Diff", "Efecto comparativo sobre la corrección de errores algorítmicos (falsos positivos/negativos).")
+            ]
+            for path, title, desc in figuras_post:
+                pdf.add_figure(path, title, desc)
 
-        for path, title, desc in figuras_post:
-            pdf.add_figure(path, title, desc)
+        pdf.chapter_title("4. Resumen Consolidado de Métricas")
+        if mitigated:
+            # TEXTOS ACTUALIZADOS CON LA TRADUCCIÓN ENTRE PARÉNTESIS
+            table_data = [
+                ['Accuracy (Precisión)', f"{m_orig.accuracy():.2%}", f"{m_eq.accuracy():.2%}", f"{m_cal.accuracy():.2%}", f"{m_roc.accuracy():.2%}", 'Max'],
+                ['Disp. Impact (Impacto Dispar)', f"{m_orig.disparate_impact():.4f}", f"{m_eq.disparate_impact():.4f}", f"{m_cal.disparate_impact():.4f}", f"{m_roc.disparate_impact():.4f}", '[0.8 - 1.25]'],
+                ['Equal Opp. (Igualdad Oport.)', f"{m_orig.equal_opportunity_difference():.4f}", f"{m_eq.equal_opportunity_difference():.4f}", f"{m_cal.equal_opportunity_difference():.4f}", f"{m_roc.equal_opportunity_difference():.4f}", '[-0.1 - 0.1]']
+            ]
+        else:
+            table_data = [
+                ['Accuracy (Precisión)', f"{m_orig.accuracy():.2%}", 'Maximizar'],
+                ['Disparate Impact (Impacto Dispar)', f"{m_orig.disparate_impact():.4f}", '[0.80 - 1.25]'],
+                ['Equal Opportunity (Igualdad Oport.)', f"{m_orig.equal_opportunity_difference():.4f}", '[-0.10 - 0.10]']
+            ]
+            
+        pdf.draw_summary_table(table_data, mitigated)
 
-        # --- SECCIÓN 4 y 5: TABLA Y DICTAMEN FINAL ---
-        acc_orig = m_orig.accuracy()
-        acc_mit = m_mit.accuracy()
-        table_data = [
-            ['Precisión (Accuracy)', f"{acc_orig:.2%}", f"{acc_mit:.2%}", 'Maximizar'],
-            ['Disparate Impact (DI)', f"{m_orig.disparate_impact():.4f}", f"{m_mit.disparate_impact():.4f}", '[0.80 - 1.25]'],
-            ['Equal Opportunity Diff', f"{m_orig.equal_opportunity_difference():.4f}", f"{m_mit.equal_opportunity_difference():.4f}", '[-0.10 - 0.10]']
-        ]
-        
-        pdf.chapter_title("4. Resumen de Métricas")
-        pdf.draw_summary_table(table_data)
+        # NUEVA LÓGICA ESTRICTA PARA EL DICTAMEN EN EL PDF
+        if mitigated:
+            estrategias_cumplen = []
+            if auditor.evaluate_compliance(m_eq, True)[0] == "ACEPTADO": estrategias_cumplen.append("Eq. Odds")
+            if auditor.evaluate_compliance(m_cal, True)[0] == "ACEPTADO": estrategias_cumplen.append("Calibrated EqOdds")
+            if auditor.evaluate_compliance(m_roc, True)[0] == "ACEPTADO": estrategias_cumplen.append("ROC")
+            
+            if estrategias_cumplen:
+                nota_mitigacion = f" (A pesar de que las intervenciones técnicas de {', '.join(estrategias_cumplen)} demostraron viabilidad para corregir el sesgo)."
+            else:
+                nota_mitigacion = " (Ninguna técnica de post-procesamiento logró revertir el sesgo)."
+                
+            st_final = f"RECHAZADO. El sistema base ('Caja Negra') incumple las normativas de equidad algorítmica desde su origen{nota_mitigacion}"
+        else:
+            st_orig_val, _, _ = auditor.evaluate_compliance(m_orig, True)
+            st_final = f"{st_orig_val}. El modelo original se encuentra dentro de los umbrales éticos de gobernanza desde su diseño."
 
-        st_mit, _, _ = auditor.evaluate_compliance(m_mit, True)
         pdf.chapter_title("5. Dictamen Final de Certificación")
-        pdf.chapter_body(f"Resultado final de gobernanza post-mitigación: {st_mit}. Fin del reporte.")
+        
+        # Evaluar el color basado en si hubo mitigación
+        if mitigated:
+            pdf.set_text_color(220, 20, 60) # Rojo Carmesí
+        else:
+            pdf.set_text_color(34, 139, 34) # Verde Bosque
+            
+        pdf.chapter_body(f"Resultado final de la auditoría: {st_final} Fin del reporte.")
+        pdf.set_text_color(0, 0, 0) # Restaurar color por defecto
 
         pdf.output(f"Reporte_Gobernanza_{config['dataset_name'].replace(' ', '_')}.pdf")
         print(f"\n[ÉXITO] Reporte generado: Reporte_Gobernanza_{config['dataset_name'].replace(' ', '_')}.pdf")
@@ -488,4 +560,4 @@ def generate_pdf_report(auditor, m_orig, m_mit):
     except Exception as e:
         print(f"\n[ERROR] Falló la generación del PDF: {e}")
 
-generate_pdf_report(gov_auditor, classified_metric_orig, classified_metric_mitigada)
+generate_pdf_report(gov_auditor, classified_metric_orig, classified_metric_eq, classified_metric_cal, classified_metric_roc, mitigation_applied)
