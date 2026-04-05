@@ -31,6 +31,73 @@ plt.rcParams['figure.figsize'] = (10, 6)
 plt.rcParams['font.size'] = 11
 
 # =============================================================================
+# FUNCIÓN DE VALIDACIÓN DE ESQUEMA (SCHEMA) CORREGIDA
+# =============================================================================
+def validar_esquema_json(config):
+    """
+    Valida estrictamente la presencia de las claves requeridas y sus tipos de datos (Schema).
+    No evalúa la lógica de negocio ni si las columnas existen, solo la estructura.
+    """
+    errores = []
+    
+    esquema_raiz = {
+        "dataset_name": str,
+        "data_path": str,
+        "label_name": str,
+        "favorable_classes": list,
+        "protected_attribute_names": list,
+        "privileged_classes": list,
+        "features_to_keep": list,
+        "plot_mapping": dict
+    }
+    
+    esquema_mapping = {
+        "target_label_col": str,
+        "target_label_name": str,
+        "protected_col": str,
+        "priv_val_name": str,
+        "unpriv_val_name": str,
+        "risk_score_col": str,
+        "risk_threshold": int
+    }
+
+    # 1. Validar raíz
+    for clave, tipo_esperado in esquema_raiz.items():
+        if clave not in config:
+            errores.append(f"Estructura JSON: Falta la clave principal '{clave}'.")
+        else:
+            valor = config[clave]
+            # Python considera a los booleanos como enteros, evitamos ese falso positivo
+            if isinstance(valor, bool) and tipo_esperado != bool:
+                errores.append(f"Estructura JSON: La clave '{clave}' no puede ser booleana.")
+            elif not isinstance(valor, tipo_esperado):
+                errores.append(f"Estructura JSON: La clave '{clave}' debe ser de tipo '{tipo_esperado.__name__}'.")
+
+    # Si no existe plot_mapping o no es diccionario, cortamos acá para evitar errores en cascada
+    if "plot_mapping" not in config or not isinstance(config["plot_mapping"], dict):
+        return errores
+
+    mapping = config["plot_mapping"]
+
+    # 2. Validar interior de plot_mapping
+    for clave, tipo_esperado in esquema_mapping.items():
+        if clave not in mapping:
+            errores.append(f"Estructura JSON: Falta la clave '{clave}' dentro de 'plot_mapping'.")
+        else:
+            valor = mapping[clave]
+            if isinstance(valor, bool):
+                errores.append(f"Estructura JSON: La clave 'plot_mapping.{clave}' no puede ser booleana.")
+            elif not isinstance(valor, tipo_esperado):
+                errores.append(f"Estructura JSON: La clave 'plot_mapping.{clave}' debe ser de tipo '{tipo_esperado.__name__}'.")
+
+    # Validar secondary_col que es opcional
+    sec_col = config.get('secondary_col') or mapping.get('secondary_col')
+    if sec_col is not None and not isinstance(sec_col, str):
+        errores.append("Estructura JSON: La clave 'secondary_col', si se provee, debe ser un string.")
+
+    return errores
+
+# =============================================================================
 # CLASE DE GOBERNANZA Y AUDITORÍA
 # =============================================================================
 class AIGovernanceAuditor:
@@ -78,7 +145,6 @@ class AIGovernanceAuditor:
             print(f"\n[INTERVENCIÓN 3] REJECT OPTION CLASSIFICATION (ROC): {st_roc}")
             print(f"  > Disparate Impact: {di_roc:.4f} | Equal Opp. Diff: {eod_roc:.4f}")
             
-            # Evaluar cuáles estrategias demostraron viabilidad técnica
             estrategias_cumplen = []
             if st_eq == "ACEPTADO": estrategias_cumplen.append("Eq. Odds")
             if st_cal == "ACEPTADO": estrategias_cumplen.append("Cal. EqOdds")
@@ -87,7 +153,6 @@ class AIGovernanceAuditor:
             if estrategias_cumplen:
                 print(f"\n[INFO TÉCNICA] Las intervenciones {', '.join(estrategias_cumplen)} logran corregir matemáticamente el sesgo.")
             
-            # NUEVA LÓGICA ESTRICTA: Si se aplicó mitigación, es porque el original falló. El dictamen es RECHAZADO.
             status_final = "RECHAZADO"
         else:
             print("\n[INFO] No se aplicó mitigación algorítmica por encontrarse dentro de los umbrales éticos.")
@@ -112,31 +177,152 @@ config_path = args.config
 
 if not os.path.exists(config_path):
     print("\n❌ ERROR CRÍTICO: No se encontró el archivo de configuración.")
-    print(f"   Ruta buscada: {os.path.abspath(config_path)}")
     sys.exit(1)
 
-with open(config_path, 'r') as f:
-    config = json.load(f)
+# FASE 0: Validar sintaxis estricta del JSON
+try:
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+except json.JSONDecodeError as e:
+    print("\n❌ ERROR CRÍTICO DE SINTAXIS JSON:")
+    print(f"   El archivo '{config_path}' está mal escrito (ej. falta un valor, sobra una coma).")
+    print(f"   Detalle: {e}")
+    sys.exit(1)
 
-data_path = config.get('data_path', '')
+print("\n[*] FASE 1: Validando Estructura (Schema) del JSON...")
+errores_esquema = validar_esquema_json(config)
+
+if errores_esquema:
+    print("\n❌ EL JSON NO RESPETA LA ESTRUCTURA ESPERADA:")
+    for err in errores_esquema:
+        print(f"  -> {err}")
+    print("\nDeteniendo ejecución. Corrige la estructura del JSON e intenta nuevamente.")
+    sys.exit(1)
+
+print("✓ Estructura de JSON válida.")
+
+print("\n[*] FASE 2: Validando Reglas de Negocio y Valores Nulos...")
+errores_valores = []
+mapping = config['plot_mapping']
+
+# 1. Validar que los campos de texto obligatorios no vengan vacíos ("")
+campos_texto_obligatorios = [
+    ("dataset_name", config['dataset_name']),
+    ("data_path", config['data_path']),
+    ("label_name", config['label_name']),
+    ("plot_mapping.target_label_name", mapping['target_label_name'])
+]
+
+for nombre, valor in campos_texto_obligatorios:
+    if not str(valor).strip():
+        errores_valores.append(f"El valor de '{nombre}' no puede estar vacío.")
+
+# 2. Validar que las listas obligatorias no estén vacías ([])
+listas_obligatorias = [
+    ("favorable_classes", config['favorable_classes']),
+    ("protected_attribute_names", config['protected_attribute_names']),
+    ("privileged_classes", config['privileged_classes']),
+    ("features_to_keep", config['features_to_keep'])
+]
+
+for nombre, lista in listas_obligatorias:
+    if len(lista) == 0:
+        errores_valores.append(f"El array '{nombre}' debe contener al menos un elemento.")
+
+# 3. Validación estricta del Umbral de Riesgo (ya garantizamos en la FASE 1 que es un int puro)
+risk_thresh_val = mapping['risk_threshold']
+if not (0 <= risk_thresh_val <= 10):
+    errores_valores.append("el risk_threshold debe ser un entero del 0 al 10.")
+
+if errores_valores:
+    print("\n❌ SE DETECTARON VALORES INVÁLIDOS EN EL JSON:")
+    for err in errores_valores:
+        print(f"  -> {err}")
+    print("\nDeteniendo ejecución. Corrige los valores e intenta nuevamente.")
+    sys.exit(1)
+
+print("✓ Valores de negocio válidos.")
+
+# =============================================================================
+# [PASO 4b] CARGA DEL DATASET Y VALIDACIÓN DE DATOS VS JSON
+# =============================================================================
+print("\n[*] FASE 3: Validando integridad con el dataset CSV...")
+data_path = config['data_path']
 if not os.path.exists(data_path):
-    print("\n❌ ERROR CRÍTICO: No se encontró el dataset CSV.")
-    print(f"   Ruta buscada: {os.path.abspath(data_path) if data_path else 'No definida en el JSON'}")
+    print(f"\n❌ ERROR CRÍTICO: No se encontró el dataset CSV en la ruta: {data_path}")
     sys.exit(1)
 
 df_raw = pd.read_csv(data_path)
+errores_datos = []
+
+# Validar que las columnas existan
+for col in config['features_to_keep']:
+    if col not in df_raw.columns:
+        errores_datos.append(f"La columna '{col}' (en features_to_keep) no existe en el CSV.")
+
+p_col = mapping['protected_col']
+t_col = mapping['target_label_col']
+risk_col = mapping['risk_score_col']
+sec_col = config.get('secondary_col') or mapping.get('secondary_col')
+
+if p_col not in df_raw.columns: errores_datos.append(f"La columna protegida '{p_col}' no existe en el CSV.")
+if t_col not in df_raw.columns: errores_datos.append(f"La columna objetivo '{t_col}' no existe en el CSV.")
+if risk_col not in df_raw.columns: errores_datos.append(f"La columna de riesgo '{risk_col}' no existe en el CSV.")
+if sec_col and sec_col not in df_raw.columns: errores_datos.append(f"La columna secundaria '{sec_col}' no existe en el CSV.")
+
+# Validar categorías del atributo protegido
+if p_col in df_raw.columns:
+    valores_reales = df_raw[p_col].dropna().unique()
+    priv_val = mapping['priv_val_name']
+    unpriv_val = mapping['unpriv_val_name']
+    
+    if priv_val not in valores_reales:
+        errores_datos.append(f"El grupo '{priv_val}' no existe en la columna '{p_col}'. Valores posibles: {list(valores_reales)}")
+    if unpriv_val not in valores_reales:
+        errores_datos.append(f"El grupo '{unpriv_val}' no existe en la columna '{p_col}'. Valores posibles: {list(valores_reales)}")
+
+# Validar AIF360
+aif_label = config['label_name']
+if aif_label not in df_raw.columns:
+    errores_datos.append(f"La columna de AIF360 '{aif_label}' no existe en el CSV.")
+else:
+    val_fav = config['favorable_classes'][0]
+    if val_fav not in df_raw[aif_label].dropna().unique():
+        errores_datos.append(f"El valor favorable '{val_fav}' no existe en la columna '{aif_label}'.")
+    
+aif_prot_attrs = config['protected_attribute_names']
+if not aif_prot_attrs or aif_prot_attrs[0] not in df_raw.columns:
+    errores_datos.append(f"La columna protegida de AIF360 '{aif_prot_attrs}' no existe en el CSV.")
+else:
+    priv_classes = config['privileged_classes']
+    if priv_classes and isinstance(priv_classes[0], list) and len(priv_classes[0]) > 0:
+        val_aif360 = priv_classes[0][0]
+        valores_reales_aif = df_raw[aif_prot_attrs[0]].dropna().unique()
+        if val_aif360 not in valores_reales_aif:
+            errores_datos.append(f"El valor privilegiado '{val_aif360}' no existe en la columna '{aif_prot_attrs[0]}'.")
+    else:
+        errores_datos.append("El parámetro 'privileged_classes' está mal formateado. Formato esperado: [['Valor']].")
+
+if errores_datos:
+    print("\n❌ SE DETECTARON INCONSISTENCIAS CRÍTICAS ENTRE EL JSON Y EL DATASET:")
+    for err in errores_datos:
+        print(f"  -> {err}")
+    print("\nDeteniendo ejecución. Corrige la configuración o los datos e intenta nuevamente.")
+    sys.exit(1)
+    
+print("✓ Datos validados exitosamente.\n")
+# =============================================================================
+
 df = df_raw[config['features_to_keep']].copy()
 df = df.dropna()
 
-p_col = config['plot_mapping']['protected_col']
-t_col = config['plot_mapping']['target_label_col']
-t_name = config['plot_mapping']['target_label_name']
-priv_val = config['plot_mapping']['priv_val_name']
-unpriv_val = config['plot_mapping']['unpriv_val_name']
-risk_col = config['plot_mapping']['risk_score_col']
-risk_thresh = config['plot_mapping']['risk_threshold']
+t_name = mapping['target_label_name']
+risk_thresh = mapping['risk_threshold']
 
-df['target_label_text'] = df[t_col].map({1: f'Positivo ({t_name})', 0: f'Negativo (No {t_name})'})
+pos_label = t_name
+neg_label = f"No {t_name}"
+
+df['target_label_text'] = df[t_col].map({1: pos_label, 0: neg_label})
 df['predicted_high_risk'] = (df[risk_col] >= risk_thresh).astype(int)
 df['target_binary'] = df[t_col].astype(int)
 df = df[df[p_col].isin([priv_val, unpriv_val])]
@@ -150,7 +336,8 @@ dataset_orig = StandardDataset(
     df=df[config['features_to_keep']], label_name=config['label_name'],
     favorable_classes=config['favorable_classes'],
     protected_attribute_names=config['protected_attribute_names'],
-    privileged_classes=config['privileged_classes'], categorical_features=cat_cols
+    privileged_classes=[[priv_val]], 
+    categorical_features=cat_cols
 )
 
 protected_attr_name = config['protected_attribute_names'][0]
@@ -160,7 +347,6 @@ unprivileged_groups = [{protected_attr_name: 0.0}]
 dataset_pred = dataset_orig.copy(deepcopy=True)
 dataset_pred.labels = df['predicted_high_risk'].values.reshape(-1, 1)
 
-# Normalizar los puntajes de riesgo (0 a 1) para que RejectOptionClassification funcione correctamente
 scores_norm = ((df[risk_col] - df[risk_col].min()) / (df[risk_col].max() - df[risk_col].min())).values.reshape(-1, 1)
 dataset_orig.scores = scores_norm
 dataset_pred.scores = scores_norm
@@ -217,7 +403,7 @@ for idx, group in enumerate(groups[:2]):
     sns.heatmap(cm_normalized, annot=True, fmt='.1f', cmap='YlOrRd', 
                 cbar_kws={'label': 'Porcentaje (%)'}, ax=axes[idx],
                 xticklabels=['Pred: Bajo', 'Pred: Alto'],
-                yticklabels=['Real: Negativo', 'Real: Positivo'])
+                yticklabels=[f'Real: {neg_label}', f'Real: {pos_label}'])
     axes[idx].set_title(f'{group}\n(n={len(df_group)})', fontweight='bold', fontsize=12)
     axes[idx].set_xlabel('Predicción', fontweight='bold')
     axes[idx].set_ylabel('Valor Real', fontweight='bold')
@@ -229,8 +415,8 @@ plt.close()
 # FIG 6.5 - Distribución de Scores (Violin Plot)
 plt.figure(figsize=(12, 6))
 paleta_violines = {
-    f'Positivo ({t_name})': '#e74c3c',   # Rojo: Reincidió
-    f'Negativo (No {t_name})': '#2ecc71' # Verde: No reincidió
+    pos_label: '#e74c3c', # Rojo: Riesgo
+    neg_label: '#2ecc71'  # Verde: Favorable
 }
 
 sns.violinplot(
@@ -274,6 +460,11 @@ plt.close()
 # FIG 6.7a - Diagnóstico: DI
 plt.figure(figsize=(10, 6))
 di_value = classified_metric_orig.disparate_impact()
+
+if np.isnan(di_value) or np.isinf(di_value):
+    print("⚠️ ALERTA: División por cero en Disparate Impact. Forzando a 0.0 para graficar.")
+    di_value = 0.0
+
 bar_color = '#e67e22' if di_value > 1.25 or di_value < 0.8 else '#2ecc71'
 plt.bar(['Disparate Impact\n(Predicciones)'], [di_value], color=bar_color, width=0.35)
 plt.axhline(y=1.0, color='black', linestyle='-', linewidth=2, label='Equidad Ideal (1.0)')
@@ -292,6 +483,10 @@ plt.close()
 # FIG 6.7b - Diagnóstico: EOD
 plt.figure(figsize=(10, 6))
 eod_value = classified_metric_orig.equal_opportunity_difference()
+
+if np.isnan(eod_value) or np.isinf(eod_value):
+    eod_value = 0.0
+
 bar_color_eod = '#e67e22' if abs(eod_value) > 0.1 else '#2ecc71'
 plt.bar(['Equal Opportunity Diff\n(Predicciones)'], [eod_value], color=bar_color_eod, width=0.35)
 plt.axhline(y=0.0, color='black', linestyle='-', linewidth=2, label='Equidad Ideal (0.0)')
@@ -370,7 +565,8 @@ if status_inicial == "RECHAZADO":
     plt.ylabel('Ratio')
     for bar in bars:
         yval = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width()/2, yval + 0.02, f'{yval:.4f}', ha='center', va='bottom', fontweight='bold')
+        if not np.isnan(yval) and not np.isinf(yval):
+            plt.text(bar.get_x() + bar.get_width()/2, yval + 0.02, f'{yval:.4f}', ha='center', va='bottom', fontweight='bold')
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
     plt.savefig('figura_6_8_evolucion_di.png', dpi=300, bbox_inches='tight')
@@ -387,8 +583,9 @@ if status_inicial == "RECHAZADO":
     plt.ylabel('Diferencia')
     for bar in bars:
         yval = bar.get_height()
-        offset = 0.01 if yval > 0 else -0.05
-        plt.text(bar.get_x() + bar.get_width()/2, yval + offset, f'{yval:.4f}', ha='center', va='bottom', fontweight='bold')
+        if not np.isnan(yval) and not np.isinf(yval):
+            offset = 0.01 if yval > 0 else -0.05
+            plt.text(bar.get_x() + bar.get_width()/2, yval + offset, f'{yval:.4f}', ha='center', va='bottom', fontweight='bold')
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
     plt.savefig('figura_6_9_evolucion_eod.png', dpi=300, bbox_inches='tight')
@@ -437,7 +634,6 @@ class GovernancePDF(FPDF):
         self.set_fill_color(52, 152, 219)
         self.set_text_color(255, 255, 255)
         
-        # Ancho ajustado (columna 1 de 40 a 50) para asegurar que quepan las traducciones
         w = [50, 24, 24, 24, 24, 28] if mitigated else [80, 50, 50]
         headers = ['Métrica', 'Original', 'Eq. Odds', 'Cal. EqOdds', 'ROC', 'Umbral Óptimo'] if mitigated else ['Métrica', 'Valor Obtenido', 'Umbral Óptimo']
         
@@ -465,13 +661,13 @@ def generate_pdf_report(auditor, m_orig, m_eq, m_cal, m_roc, mitigated):
         pdf.add_page()
 
         pdf.chapter_title("1. Alcance de la Auditoría")
-        pdf.chapter_body(f"Análisis integral de sesgo algorítmico sobre el sistema {config['dataset_name']} focalizado en el atributo protegido '{config['plot_mapping']['protected_col']}'.")
+        pdf.chapter_body(f"Análisis integral de sesgo algorítmico sobre el sistema {config['dataset_name']} focalizado en el atributo protegido '{p_col}'.")
 
         figuras_pre = [
-            ('figura_6_1_real_por_atributo.png', "Figura 6.1 - Realidad por Atributo Protegido", "Distribución base de los datos históricos."),
+            ('figura_6_1_real_por_atributo.png', f"Figura 6.1 - {t_name} Real por Atributo Protegido", "Distribución base de los datos históricos."),
             ('figura_6_3_comparacion_real_predicha.png', "Figura 6.3 - Real vs Predicha", "Brecha de predicción entre grupos."),
             ('figura_6_4_matriz_confusion.png', "Figura 6.4 - Matrices de Confusión", "Desglose de errores por grupo."),
-            ('figura_6_5_distribucion_scores.png', "Figura 6.5 - Distribución de Scores de Riesgo", "Densidad de los puntajes asignados, divididos por grupo y resultado real (verde: no reincidió, rojo: reincidió)."),
+            ('figura_6_5_distribucion_scores.png', "Figura 6.5 - Distribución de Scores de Riesgo", f"Densidad de los puntajes asignados, divididos por grupo y resultado real (verde: {neg_label}, rojo: {pos_label})."),
             ('figura_6_6_tasas_error.png', "Figura 6.6 - Tasas de Error Dispares", "Comparativa de Falsos Positivos y Falsos Negativos."),
             ('figura_6_7_disparate_impact.png', "Figura 6.7a - Diagnóstico: Disparate Impact", "Cumplimiento de paridad estadística pre-mitigación."),
             ('figura_6_7_b_equal_opportunity.png', "Figura 6.7b - Diagnóstico: Equal Opportunity Diff", "Cumplimiento de igualdad de oportunidades pre-mitigación.")
@@ -511,7 +707,6 @@ def generate_pdf_report(auditor, m_orig, m_eq, m_cal, m_roc, mitigated):
 
         pdf.chapter_title("4. Resumen Consolidado de Métricas")
         if mitigated:
-            # TEXTOS ACTUALIZADOS CON LA TRADUCCIÓN ENTRE PARÉNTESIS
             table_data = [
                 ['Accuracy (Precisión)', f"{m_orig.accuracy():.2%}", f"{m_eq.accuracy():.2%}", f"{m_cal.accuracy():.2%}", f"{m_roc.accuracy():.2%}", 'Max'],
                 ['Disp. Impact (Impacto Dispar)', f"{m_orig.disparate_impact():.4f}", f"{m_eq.disparate_impact():.4f}", f"{m_cal.disparate_impact():.4f}", f"{m_roc.disparate_impact():.4f}", '[0.8 - 1.25]'],
@@ -526,7 +721,6 @@ def generate_pdf_report(auditor, m_orig, m_eq, m_cal, m_roc, mitigated):
             
         pdf.draw_summary_table(table_data, mitigated)
 
-        # NUEVA LÓGICA ESTRICTA PARA EL DICTAMEN EN EL PDF
         if mitigated:
             estrategias_cumplen = []
             if auditor.evaluate_compliance(m_eq, True)[0] == "ACEPTADO": estrategias_cumplen.append("Eq. Odds")
@@ -544,15 +738,13 @@ def generate_pdf_report(auditor, m_orig, m_eq, m_cal, m_roc, mitigated):
             st_final = f"{st_orig_val}. El modelo original se encuentra dentro de los umbrales éticos de gobernanza desde su diseño."
 
         pdf.chapter_title("5. Dictamen Final de Certificación")
-        
-        # Evaluar el color basado en si hubo mitigación
         if mitigated:
-            pdf.set_text_color(220, 20, 60) # Rojo Carmesí
+            pdf.set_text_color(220, 20, 60)
         else:
-            pdf.set_text_color(34, 139, 34) # Verde Bosque
+            pdf.set_text_color(34, 139, 34)
             
         pdf.chapter_body(f"Resultado final de la auditoría: {st_final} Fin del reporte.")
-        pdf.set_text_color(0, 0, 0) # Restaurar color por defecto
+        pdf.set_text_color(0, 0, 0)
 
         pdf.output(f"Reporte_Gobernanza_{config['dataset_name'].replace(' ', '_')}.pdf")
         print(f"\n[ÉXITO] Reporte generado: Reporte_Gobernanza_{config['dataset_name'].replace(' ', '_')}.pdf")

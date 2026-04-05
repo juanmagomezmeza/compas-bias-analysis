@@ -48,12 +48,10 @@ cd compas-bias-analysis
 
 # Windows
 python -m venv venv
-
 .\venv\Scripts\activate
 
 # Linux / MacOS
 python3 -m venv venv
-
 source venv/bin/activate
 
 ### 3. Instalar dependencias
