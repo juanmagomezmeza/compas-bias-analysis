@@ -13,9 +13,9 @@ function App() {
     setValue, 
     formState: { isValid } 
   } = useForm({
-    mode: "onChange", // Valida en tiempo real mientras el usuario escribe/selecciona
+    mode: "onChange", 
     defaultValues: {
-      favorable_classes: [0],
+      favorable_classes: [1],
       plot_mapping: { risk_threshold: 5 }
     }
   });
@@ -42,7 +42,7 @@ function App() {
       dataset_name: data.dataset_name,
       data_path: data.data_path,
       label_name: data.label_name,
-      favorable_classes: [0], 
+      favorable_classes: [1],
       protected_attribute_names: [data.protected_col],
       privileged_classes: [[data.privileged_val_raw]],
       features_to_keep: headers, 
@@ -66,7 +66,6 @@ function App() {
     link.click();
   };
 
-  // Estilo común para inputs
   const inputBaseStyle = "w-full bg-slate-700 border-slate-600 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-emerald-500 transition-all";
 
   return (
@@ -83,7 +82,6 @@ function App() {
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-8">
           
-          {/* SECCIÓN 1: Carga de Datos */}
           <section className="bg-slate-800 p-6 rounded-xl border border-slate-700">
             <h2 className="flex items-center gap-2 text-xl font-semibold mb-4">
               <FileText className="text-blue-400" /> 1. Carga de Dataset
@@ -109,7 +107,6 @@ function App() {
             </div>
           </section>
 
-          {/* SECCIÓN 2: Mapeo de Variables */}
           {headers.length > 0 && (
             <section className="bg-slate-800 p-6 rounded-xl border border-slate-700 animate-in fade-in slide-in-from-bottom-4 duration-500">
               <h2 className="flex items-center gap-2 text-xl font-semibold mb-6">
