@@ -106,7 +106,8 @@ class AIGovernanceAuditor:
         self.unprivileged_groups = unprivileged_groups
         self.thresholds = {
             'disparate_impact': (0.8, 1.25),
-            'equal_opportunity_diff': (-0.1, 0.1)
+            'equal_opportunity_diff': (-0.1, 0.1),
+            'false_positive_rate_diff': (-0.1, 0.1)
         }
 
     def evaluate_compliance(self, metric, is_classification=False):
@@ -117,9 +118,14 @@ class AIGovernanceAuditor:
         if is_classification:
             eod = metric.equal_opportunity_difference()
             eod_compliant = self.thresholds['equal_opportunity_diff'][0] <= eod <= self.thresholds['equal_opportunity_diff'][1]
-            if not eod_compliant: 
+            
+            fprd = metric.false_positive_rate_difference()
+            fprd_compliant = self.thresholds['false_positive_rate_diff'][0] <= fprd <= self.thresholds['false_positive_rate_diff'][1]
+            
+            # El modelo debe cumplir con DI, EOD y FPRD para ser aceptado
+            if not eod_compliant or not fprd_compliant: 
                 status = "RECHAZADO"
-            return status, di, eod
+            return status, di, eod, fprd
             
         return status, di
 
@@ -128,22 +134,22 @@ class AIGovernanceAuditor:
         print("REPORTE DE CERTIFICACIÓN DE GOBERNANZA ALGORÍTMICA")
         print("="*70)
         
-        st_orig, di_orig, eod_orig = self.evaluate_compliance(m_orig, True)
+        st_orig, di_orig, eod_orig, fprd_orig = self.evaluate_compliance(m_orig, True)
         print(f"[CAJA NEGRA] SISTEMA ORIGINAL ({dataset_name}): {st_orig}")
-        print(f"  > Disparate Impact: {di_orig:.4f} | Equal Opp. Diff: {eod_orig:.4f}")
+        print(f"  > Disparate Impact: {di_orig:.4f} | Equal Opp. Diff: {eod_orig:.4f} | FPR Diff: {fprd_orig:.4f}")
         
         if mitigation_applied:
-            st_eq, di_eq, eod_eq = self.evaluate_compliance(m_eq, True)
+            st_eq, di_eq, eod_eq, fprd_eq = self.evaluate_compliance(m_eq, True)
             print(f"\n[INTERVENCIÓN 1] EQUALIZED ODDS: {st_eq}")
-            print(f"  > Disparate Impact: {di_eq:.4f} | Equal Opp. Diff: {eod_eq:.4f}")
+            print(f"  > Disparate Impact: {di_eq:.4f} | Equal Opp. Diff: {eod_eq:.4f} | FPR Diff: {fprd_eq:.4f}")
             
-            st_cal, di_cal, eod_cal = self.evaluate_compliance(m_cal, True)
+            st_cal, di_cal, eod_cal, fprd_cal = self.evaluate_compliance(m_cal, True)
             print(f"\n[INTERVENCIÓN 2] CALIBRATED EQUALIZED ODDS: {st_cal}")
-            print(f"  > Disparate Impact: {di_cal:.4f} | Equal Opp. Diff: {eod_cal:.4f}")
+            print(f"  > Disparate Impact: {di_cal:.4f} | Equal Opp. Diff: {eod_cal:.4f} | FPR Diff: {fprd_cal:.4f}")
 
-            st_roc, di_roc, eod_roc = self.evaluate_compliance(m_roc, True)
+            st_roc, di_roc, eod_roc, fprd_roc = self.evaluate_compliance(m_roc, True)
             print(f"\n[INTERVENCIÓN 3] REJECT OPTION CLASSIFICATION (ROC): {st_roc}")
-            print(f"  > Disparate Impact: {di_roc:.4f} | Equal Opp. Diff: {eod_roc:.4f}")
+            print(f"  > Disparate Impact: {di_roc:.4f} | Equal Opp. Diff: {eod_roc:.4f} | FPR Diff: {fprd_roc:.4f}")
             
             estrategias_cumplen = []
             if st_eq == "ACEPTADO": estrategias_cumplen.append("Eq. Odds")
@@ -498,16 +504,45 @@ plt.ylabel('Diferencia', fontsize=12, fontweight='bold')
 y_max_eod = max(abs(eod_value) + 0.1, 0.2)
 plt.ylim(-y_max_eod, y_max_eod)
 plt.legend(loc='upper right', framealpha=0.95)
-plt.text(0, eod_value + (0.02 if eod_value > 0 else -0.05), f'{eod_value:.4f}', ha='center', va='bottom', fontweight='bold', fontsize=12, color=bar_color_eod)
+# Corrección de superposición para barras negativas
+offset_eod = 0.02 if eod_value >= 0 else -0.02
+valign_eod = 'bottom' if eod_value >= 0 else 'top'
+plt.text(0, eod_value + offset_eod, f'{eod_value:.4f}', ha='center', va=valign_eod, fontweight='bold', fontsize=12, color=bar_color_eod)
 plt.tight_layout()
 plt.savefig('figura_6_7_b_equal_opportunity.png', dpi=300, bbox_inches='tight')
+plt.close()
+
+# FIG 6.7c - Diagnóstico: FPRD (NUEVO)
+plt.figure(figsize=(10, 6))
+fprd_value = classified_metric_orig.false_positive_rate_difference()
+
+if np.isnan(fprd_value) or np.isinf(fprd_value):
+    fprd_value = 0.0
+
+bar_color_fprd = '#e67e22' if abs(fprd_value) > 0.1 else '#2ecc71'
+plt.bar(['FPR Diff\n(Predicciones)'], [fprd_value], color=bar_color_fprd, width=0.35)
+plt.axhline(y=0.0, color='black', linestyle='-', linewidth=2, label='Equidad Ideal (0.0)')
+plt.axhline(y=-0.1, color='#e74c3c', linestyle='--', linewidth=1.5, label='Umbral Mínimo (-0.1)')
+plt.axhline(y=0.1, color='#e74c3c', linestyle='--', linewidth=1.5, label='Umbral Máximo (0.1)')
+plt.axhspan(-0.1, 0.1, color='#2ecc71', alpha=0.1)
+plt.title('Diagnóstico: Medición de False Positive Rate Difference', fontsize=14, fontweight='bold', pad=20)
+plt.ylabel('Diferencia', fontsize=12, fontweight='bold')
+y_max_fprd = max(abs(fprd_value) + 0.1, 0.2)
+plt.ylim(-y_max_fprd, y_max_fprd)
+plt.legend(loc='upper right', framealpha=0.95)
+# Corrección de superposición para barras negativas
+offset_fprd = 0.02 if fprd_value >= 0 else -0.02
+valign_fprd = 'bottom' if fprd_value >= 0 else 'top'
+plt.text(0, fprd_value + offset_fprd, f'{fprd_value:.4f}', ha='center', va=valign_fprd, fontweight='bold', fontsize=12, color=bar_color_fprd)
+plt.tight_layout()
+plt.savefig('figura_6_7_c_fprd.png', dpi=300, bbox_inches='tight')
 plt.close()
 
 # =============================================================================
 # [PASO 7 y 8] DECISIÓN Y LABORATORIO DE POST-PROCESAMIENTO
 # =============================================================================
 print("\n[Paso 7] Validando presencia de sesgo...")
-status_inicial, di_inicial, eod_inicial = gov_auditor.evaluate_compliance(classified_metric_orig, True)
+status_inicial, di_inicial, eod_inicial, fprd_inicial = gov_auditor.evaluate_compliance(classified_metric_orig, True)
 
 mitigation_applied = False
 classified_metric_eq = None
@@ -528,6 +563,7 @@ if status_inicial == "RECHAZADO":
                                                 unprivileged_groups=unprivileged_groups, privileged_groups=privileged_groups)
     di_eq = classified_metric_eq.disparate_impact()
     eod_eq = classified_metric_eq.equal_opportunity_difference()
+    fprd_eq = classified_metric_eq.false_positive_rate_difference()
     
     # --- RUTA B: Calibrated Equalized Odds ---
     print("\n[Paso 8.B] Ejecutando Calibrated Equalized Odds...")
@@ -538,6 +574,7 @@ if status_inicial == "RECHAZADO":
                                                  unprivileged_groups=unprivileged_groups, privileged_groups=privileged_groups)
     di_cal = classified_metric_cal.disparate_impact()
     eod_cal = classified_metric_cal.equal_opportunity_difference()
+    fprd_cal = classified_metric_cal.false_positive_rate_difference()
     
     # --- RUTA C: Reject Option Classification ---
     print("\n[Paso 8.C] Ejecutando Reject Option Classification (ROC)...")
@@ -548,6 +585,7 @@ if status_inicial == "RECHAZADO":
                                                  unprivileged_groups=unprivileged_groups, privileged_groups=privileged_groups)
     di_roc = classified_metric_roc.disparate_impact()
     eod_roc = classified_metric_roc.equal_opportunity_difference()
+    fprd_roc = classified_metric_roc.false_positive_rate_difference()
     
     # --- GRÁFICOS COMPARATIVOS DE LOS ALGORITMOS ---
     print("\n[Paso 9] Generando gráficos de evaluación del Post-procesamiento...")
@@ -566,7 +604,10 @@ if status_inicial == "RECHAZADO":
     for bar in bars:
         yval = bar.get_height()
         if not np.isnan(yval) and not np.isinf(yval):
-            plt.text(bar.get_x() + bar.get_width()/2, yval + 0.02, f'{yval:.4f}', ha='center', va='bottom', fontweight='bold')
+            # Corrección visual
+            offset = 0.02 if yval >= 0 else -0.02
+            valign = 'bottom' if yval >= 0 else 'top'
+            plt.text(bar.get_x() + bar.get_width()/2, yval + offset, f'{yval:.4f}', ha='center', va=valign, fontweight='bold')
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
     plt.savefig('figura_6_8_evolucion_di.png', dpi=300, bbox_inches='tight')
@@ -584,11 +625,34 @@ if status_inicial == "RECHAZADO":
     for bar in bars:
         yval = bar.get_height()
         if not np.isnan(yval) and not np.isinf(yval):
-            offset = 0.01 if yval > 0 else -0.05
-            plt.text(bar.get_x() + bar.get_width()/2, yval + offset, f'{yval:.4f}', ha='center', va='bottom', fontweight='bold')
+            # Reducimos el offset a la mitad (0.01) para acercarlo más a la barra
+            offset = 0.01 if yval >= 0 else -0.01
+            valign = 'bottom' if yval >= 0 else 'top'
+            plt.text(bar.get_x() + bar.get_width()/2, yval + offset, f'{yval:.4f}', ha='center', va=valign, fontweight='bold')
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
     plt.savefig('figura_6_9_evolucion_eod.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # FIG 6.10 (Evolución FPRD - NUEVO)
+    plt.figure(figsize=(11, 6))
+    bars = plt.bar(algoritmos, [fprd_inicial, fprd_eq, fprd_cal, fprd_roc], color=colores, width=0.5)
+    plt.title('Comparativa de Mitigación: False Positive Rate Diff (FPRD)', fontsize=14, fontweight='bold', pad=20)
+    plt.axhline(y=0.0, color='black', linestyle='-', linewidth=2, label='Ideal (0.0)')
+    plt.axhline(y=-0.1, color='#e74c3c', linestyle='--', linewidth=1.5, label='Umbral (-0.1 a 0.1)')
+    plt.axhline(y=0.1, color='#e74c3c', linestyle='--', linewidth=1.5)
+    plt.axhspan(-0.1, 0.1, color='#2ecc71', alpha=0.1, label='Rango Aceptable')
+    plt.ylabel('Diferencia')
+    for bar in bars:
+        yval = bar.get_height()
+        if not np.isnan(yval) and not np.isinf(yval):
+            # Reducimos el offset a la mitad (0.01) para acercarlo más a la barra
+            offset = 0.01 if yval >= 0 else -0.01
+            valign = 'bottom' if yval >= 0 else 'top'
+            plt.text(bar.get_x() + bar.get_width()/2, yval + offset, f'{yval:.4f}', ha='center', va=valign, fontweight='bold')
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    plt.savefig('figura_6_10_evolucion_fprd.png', dpi=300, bbox_inches='tight')
     plt.close()
 
 else:
@@ -670,22 +734,23 @@ def generate_pdf_report(auditor, m_orig, m_eq, m_cal, m_roc, mitigated):
             ('figura_6_5_distribucion_scores.png', "Figura 6.5 - Distribución de Scores de Riesgo", f"Densidad de los puntajes asignados, divididos por grupo y resultado real (verde: {neg_label}, rojo: {pos_label})."),
             ('figura_6_6_tasas_error.png', "Figura 6.6 - Tasas de Error Dispares", "Comparativa de Falsos Positivos y Falsos Negativos."),
             ('figura_6_7_disparate_impact.png', "Figura 6.7a - Diagnóstico: Disparate Impact", "Cumplimiento de paridad estadística pre-mitigación."),
-            ('figura_6_7_b_equal_opportunity.png', "Figura 6.7b - Diagnóstico: Equal Opportunity Diff", "Cumplimiento de igualdad de oportunidades pre-mitigación.")
+            ('figura_6_7_b_equal_opportunity.png', "Figura 6.7b - Diagnóstico: Equal Opportunity Diff", "Cumplimiento de igualdad de oportunidades pre-mitigación."),
+            ('figura_6_7_c_fprd.png', "Figura 6.7c - Diagnóstico: FPR Diff", "Cumplimiento de asimetría de falsos positivos pre-mitigación.")
         ]
         for path, title, desc in figuras_pre:
             pdf.add_figure(path, title, desc)
 
         pdf.chapter_title("2. Diagnóstico del Sistema (Caja Negra)")
-        st_orig, di_orig, eod_orig = auditor.evaluate_compliance(m_orig, True)
+        st_orig, di_orig, eod_orig, fprd_orig = auditor.evaluate_compliance(m_orig, True)
         
         if mitigated:
             mensaje = (f"ALERTA DE SESGO: Se detectó que el modelo original presenta un sesgo estadístico. "
-                       f"Impacto Dispar (DI) = {di_orig:.4f} | Diferencia Igualdad Oportunidades (EOD) = {eod_orig:.4f}. "
+                       f"Impacto Dispar (DI) = {di_orig:.4f} | Diferencia Igualdad Oportunidades (EOD) = {eod_orig:.4f} | Dif. Falsos Positivos (FPRD) = {fprd_orig:.4f}. "
                        f"Al tratarse de una Caja Negra, se procede a aplicar 3 técnicas de mitigación de Post-procesamiento.")
             pdf.set_text_color(200, 0, 0)
         else:
             mensaje = (f"CUMPLIMIENTO: El modelo analizado NO presenta un sesgo estadístico significativo. "
-                       f"Impacto Dispar (DI) = {di_orig:.4f} | Diferencia Igualdad Oportunidades (EOD) = {eod_orig:.4f}. "
+                       f"Impacto Dispar (DI) = {di_orig:.4f} | Diferencia Igualdad Oportunidades (EOD) = {eod_orig:.4f} | Dif. Falsos Positivos (FPRD) = {fprd_orig:.4f}. "
                        f"Las métricas se encuentran dentro de los umbrales de tolerancia.")
             pdf.set_text_color(0, 150, 0)
 
@@ -700,7 +765,8 @@ def generate_pdf_report(auditor, m_orig, m_eq, m_cal, m_roc, mitigated):
             pdf.chapter_body("Resultados del impacto de Equalized Odds, Calibrated Equalized Odds y Reject Option Classification sobre las métricas finales:")
             figuras_post = [
                 ('figura_6_8_evolucion_di.png', "Figura 6.8 - Evolución: Disparate Impact", "Efecto comparativo sobre el balance demográfico global de las predicciones."),
-                ('figura_6_9_evolucion_eod.png', "Figura 6.9 - Evolución: Equal Opportunity Diff", "Efecto comparativo sobre la corrección de errores algorítmicos (falsos positivos/negativos).")
+                ('figura_6_9_evolucion_eod.png', "Figura 6.9 - Evolución: Equal Opportunity Diff", "Efecto comparativo sobre la corrección de errores algorítmicos (falsos positivos/negativos)."),
+                ('figura_6_10_evolucion_fprd.png', "Figura 6.10 - Evolución: FPR Diff", "Efecto comparativo sobre la asimetría de falsos positivos.")
             ]
             for path, title, desc in figuras_post:
                 pdf.add_figure(path, title, desc)
@@ -710,13 +776,15 @@ def generate_pdf_report(auditor, m_orig, m_eq, m_cal, m_roc, mitigated):
             table_data = [
                 ['Accuracy (Precisión)', f"{m_orig.accuracy():.2%}", f"{m_eq.accuracy():.2%}", f"{m_cal.accuracy():.2%}", f"{m_roc.accuracy():.2%}", 'Max'],
                 ['Disp. Impact (Impacto Dispar)', f"{m_orig.disparate_impact():.4f}", f"{m_eq.disparate_impact():.4f}", f"{m_cal.disparate_impact():.4f}", f"{m_roc.disparate_impact():.4f}", '[0.8 - 1.25]'],
-                ['Equal Opp. (Igualdad Oport.)', f"{m_orig.equal_opportunity_difference():.4f}", f"{m_eq.equal_opportunity_difference():.4f}", f"{m_cal.equal_opportunity_difference():.4f}", f"{m_roc.equal_opportunity_difference():.4f}", '[-0.1 - 0.1]']
+                ['Equal Opp. (Igualdad Oport.)', f"{m_orig.equal_opportunity_difference():.4f}", f"{m_eq.equal_opportunity_difference():.4f}", f"{m_cal.equal_opportunity_difference():.4f}", f"{m_roc.equal_opportunity_difference():.4f}", '[-0.1 - 0.1]'],
+                ['FPR Diff (Dif. Falsos Pos.)', f"{m_orig.false_positive_rate_difference():.4f}", f"{m_eq.false_positive_rate_difference():.4f}", f"{m_cal.false_positive_rate_difference():.4f}", f"{m_roc.false_positive_rate_difference():.4f}", '[-0.1 - 0.1]']
             ]
         else:
             table_data = [
                 ['Accuracy (Precisión)', f"{m_orig.accuracy():.2%}", 'Maximizar'],
                 ['Disparate Impact (Impacto Dispar)', f"{m_orig.disparate_impact():.4f}", '[0.80 - 1.25]'],
-                ['Equal Opportunity (Igualdad Oport.)', f"{m_orig.equal_opportunity_difference():.4f}", '[-0.10 - 0.10]']
+                ['Equal Opportunity (Igualdad Oport.)', f"{m_orig.equal_opportunity_difference():.4f}", '[-0.10 - 0.10]'],
+                ['FPR Diff (Dif. Falsos Pos.)', f"{m_orig.false_positive_rate_difference():.4f}", '[-0.10 - 0.10]']
             ]
             
         pdf.draw_summary_table(table_data, mitigated)
@@ -734,7 +802,7 @@ def generate_pdf_report(auditor, m_orig, m_eq, m_cal, m_roc, mitigated):
                 
             st_final = f"RECHAZADO. El sistema base ('Caja Negra') incumple las normativas de equidad algorítmica desde su origen{nota_mitigacion}"
         else:
-            st_orig_val, _, _ = auditor.evaluate_compliance(m_orig, True)
+            st_orig_val, _, _, _ = auditor.evaluate_compliance(m_orig, True)
             st_final = f"{st_orig_val}. El modelo original se encuentra dentro de los umbrales éticos de gobernanza desde su diseño."
 
         pdf.chapter_title("5. Dictamen Final de Certificación")
